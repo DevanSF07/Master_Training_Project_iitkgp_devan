@@ -79,13 +79,13 @@ ASPECT_RATIO_0 = MEAN_L1_0 / MEAN_L2_0  # ~1.78
 # 5. MACHINE LEARNING & PI-RNN CONFIGURATION
 # ==============================================================================
 PI_RNN_CONFIG = {
-    "input_dim": 8,         # [c, T, mu00, mu10, mu01, mu11, cr, eps]
+    "input_dim": 8,         # [c, T, L1*1e4, L2*1e4, mu11*1e-4, mu00*1e-11, cr*1e3, eps/100]
     "hidden_dim": 64,       # Hidden units in GRU
     "num_layers": 2,        # Stacked GRU layers
-    "output_dim": 6,        # Predicted next state: [c, T, mu00, mu10, mu01, mu11]
+    "output_dim": 6,        # Predicted next state: [c, T, L1*1e4, L2*1e4, mu11*1e-4, mu00*1e-11]
     "learning_rate": 1e-3,
     "batch_size": 16,
-    "num_epochs": 100,
-    "physics_weight": 0.35, # Weight for physical residual loss (gamma)
-    "sequence_length": 25,  # Moving horizon window
+    "num_epochs": 80,
+    "physics_weight": 0.05, # Calibrated weight for physical residual loss (gamma)
+    "sequence_length": 15,  # Moving horizon window
 }

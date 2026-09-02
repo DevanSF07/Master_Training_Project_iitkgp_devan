@@ -106,10 +106,13 @@ def multi_step_rollout(
             next_state_norm = norm_pred[0, -1, :].cpu().numpy()
             next_state = next_state_norm * state_std + state_mean
 
-            # Physical non-negativity clipping
+            # Physical non-negativity clipping: [c, T, L1*1e4, L2*1e4, mu11*1e-4, mu00*1e-11]
             next_state[0] = np.maximum(next_state[0], 40.0)    # c >= 40 kg/m^3
             next_state[1] = np.maximum(next_state[1], 20.0)    # T >= 20 °C
-            next_state[2:] = np.maximum(next_state[2:], 1.0)   # moments > 0
+            next_state[2] = np.maximum(next_state[2], 0.5)     # L1 >= 0.5 x 10^-4 m
+            next_state[3] = np.maximum(next_state[3], 0.4)     # L2 >= 0.4 x 10^-4 m
+            next_state[4] = np.maximum(next_state[4], 0.05)    # mu11 >= 0.05 x 10^4 m^2/m^3
+            next_state[5] = np.maximum(next_state[5], 1.0)     # mu00 >= 1.0 x 10^11 #/m^3
 
             predictions.append(next_state)
 
@@ -127,21 +130,21 @@ def evaluate_batch(
     bbrnn: PIRNNModel,
     scalers: dict,
     device: str = "cpu",
-    seq_len: int = 25,
+    seq_len: int = 5,
 ) -> dict:
     """Evaluates and compares rollout trajectories against ground truth."""
     states_gt = np.column_stack([
         ground_truth["concentration"],
         ground_truth["temperature"],
-        ground_truth["mu00"],
-        ground_truth["mu10"],
-        ground_truth["mu01"],
-        ground_truth["mu11"],
+        ground_truth["mean_L1"] * 1.0e4,
+        ground_truth["mean_L2"] * 1.0e4,
+        ground_truth["mu11"] * 1.0e-4,
+        ground_truth["mu00"] * 1.0e-11,
     ])
 
     inputs_gt = np.column_stack([
-        np.full(len(states_gt), ground_truth["cooling_rate"]),
-        np.full(len(states_gt), ground_truth["epsilon"]),
+        np.full(len(states_gt), ground_truth["cooling_rate"] * 1.0e3),
+        np.full(len(states_gt), ground_truth["epsilon"] / 100.0),
     ])
 
     combined_gt = np.hstack([states_gt, inputs_gt])
@@ -158,43 +161,41 @@ def evaluate_batch(
     t_eval = ground_truth["time"][seq_len - 1:]
     gt_eval = states_gt[seq_len - 1:]
 
-    # Derived crystal sizes from moments
-    # L1 = mu10 / mu00, L2 = mu01 / mu00, AR = L1 / L2
-    pirnn_L1 = pirnn_pred_states[:, 3] / pirnn_pred_states[:, 2]
-    pirnn_L2 = pirnn_pred_states[:, 4] / pirnn_pred_states[:, 2]
+    # Direct physical crystal sizes:
+    pirnn_L1 = pirnn_pred_states[:, 2] * 1.0e-4
+    pirnn_L2 = pirnn_pred_states[:, 3] * 1.0e-4
     pirnn_AR = pirnn_L1 / np.maximum(pirnn_L2, 1e-9)
 
-    bbrnn_L1 = bbrnn_pred_states[:, 3] / bbrnn_pred_states[:, 2]
-    bbrnn_L2 = bbrnn_pred_states[:, 4] / bbrnn_pred_states[:, 2]
+    bbrnn_L1 = bbrnn_pred_states[:, 2] * 1.0e-4
+    bbrnn_L2 = bbrnn_pred_states[:, 3] * 1.0e-4
     bbrnn_AR = bbrnn_L1 / np.maximum(bbrnn_L2, 1e-9)
 
-    gt_L1 = gt_eval[:, 3] / gt_eval[:, 2]
-    gt_L2 = gt_eval[:, 4] / gt_eval[:, 2]
+    gt_L1 = gt_eval[:, 2] * 1.0e-4
+    gt_L2 = gt_eval[:, 3] * 1.0e-4
     gt_AR = gt_L1 / np.maximum(gt_L2, 1e-9)
 
     # Compute Mass Conservation Residuals: |dc/dt + rho_c * RV|
-    # RV = kV * (G1 * mu01 + G2 * mu10)
     dt = t_eval[1] - t_eval[0]
     rhoc = config.RHO_CRYSTAL
     kV = config.KV_SHAPE
 
-    def calculate_mass_residual(pred_c, pred_T, pred_mu00, pred_mu10, pred_mu01):
+    def calculate_mass_residual(pred_c, pred_T, pred_L1, pred_L2, pred_mu00):
         cs = np.array([calculate_solubility(temp) for temp in pred_T])
         sig = np.maximum(0.0, (pred_c - cs) / cs)
-        l1 = (pred_mu10 / pred_mu00)
-        l2 = (pred_mu01 / pred_mu00)
-        g1, g2 = calculate_growth_rates(sig, l1, l2)
-        rv = kV * (g1 * pred_mu01 + g2 * pred_mu10)
+        g1, g2 = calculate_growth_rates(sig, pred_L1, pred_L2)
+        mu10 = pred_L1 * (pred_mu00 * 1.0e11)
+        mu01 = pred_L2 * (pred_mu00 * 1.0e11)
+        rv = kV * (g1 * mu01 + g2 * mu10)
         dc_dt = np.gradient(pred_c, dt)
         return np.abs(dc_dt + rhoc * rv)
 
     pirnn_mass_res = calculate_mass_residual(
         pirnn_pred_states[:, 0], pirnn_pred_states[:, 1],
-        pirnn_pred_states[:, 2], pirnn_pred_states[:, 3], pirnn_pred_states[:, 4]
+        pirnn_L1, pirnn_L2, pirnn_pred_states[:, 5]
     )
     bbrnn_mass_res = calculate_mass_residual(
         bbrnn_pred_states[:, 0], bbrnn_pred_states[:, 1],
-        bbrnn_pred_states[:, 2], bbrnn_pred_states[:, 3], bbrnn_pred_states[:, 4]
+        bbrnn_L1, bbrnn_L2, bbrnn_pred_states[:, 5]
     )
 
     return {
@@ -202,8 +203,8 @@ def evaluate_batch(
         "gt": {
             "c": gt_eval[:, 0],
             "T": gt_eval[:, 1],
-            "mu00": gt_eval[:, 2],
-            "mu11": gt_eval[:, 5],
+            "mu00": gt_eval[:, 5] * 1.0e11,
+            "mu11": gt_eval[:, 4] * 1.0e4,
             "L1": gt_L1,
             "L2": gt_L2,
             "AR": gt_AR,
@@ -211,8 +212,8 @@ def evaluate_batch(
         "pirnn": {
             "c": pirnn_pred_states[:, 0],
             "T": pirnn_pred_states[:, 1],
-            "mu00": pirnn_pred_states[:, 2],
-            "mu11": pirnn_pred_states[:, 5],
+            "mu00": pirnn_pred_states[:, 5] * 1.0e11,
+            "mu11": pirnn_pred_states[:, 4] * 1.0e4,
             "L1": pirnn_L1,
             "L2": pirnn_L2,
             "AR": pirnn_AR,
@@ -221,8 +222,8 @@ def evaluate_batch(
         "bbrnn": {
             "c": bbrnn_pred_states[:, 0],
             "T": bbrnn_pred_states[:, 1],
-            "mu00": bbrnn_pred_states[:, 2],
-            "mu11": bbrnn_pred_states[:, 5],
+            "mu00": bbrnn_pred_states[:, 5] * 1.0e11,
+            "mu11": bbrnn_pred_states[:, 4] * 1.0e4,
             "L1": bbrnn_L1,
             "L2": bbrnn_L2,
             "AR": bbrnn_AR,

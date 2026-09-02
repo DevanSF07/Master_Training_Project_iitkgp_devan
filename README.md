@@ -135,20 +135,22 @@ On an unseen test batch ($T_s = 35.0^\circ\text{C}, cr = 8.33 \times 10^{-4}\tex
 
 | State Variable | Model | MSE | RMSE | MAE | $R^2$ Score |
 |---|---|---|---|---|---|
-| **Solute Concentration $c$ [kg/m³]** | **PI-RNN** | **2.2893** | **1.5130** | **1.3813** | **0.9968** |
-| | BB-RNN | 0.6566 | 0.8103 | 0.6605 | 0.9991 |
-| **Mean Crystal Length $\langle L_1 \rangle$ [m]** | **PI-RNN** | **2.2214e-10** | **1.4904e-05** | **1.4214e-05** | **0.8956** |
-| | BB-RNN | 1.3884e-10 | 1.1783e-05 | 1.1157e-05 | 0.9347 |
-| **Mean Crystal Width $\langle L_2 \rangle$ [m]** | **PI-RNN** | **7.5545e-12** | **2.7486e-06** | **2.5252e-06** | **0.9650** |
-| | BB-RNN | 3.1808e-11 | 5.6399e-06 | 5.4395e-06 | 0.8527 |
-| **Cross Moment $\mu_{11}$ [m²/m³]** | **PI-RNN** | **5.8986e+04** | **2.4287e+02** | **2.1747e+02** | **0.9943** |
-| | BB-RNN | 1.2073e+04 | 1.0988e+02 | 9.5723e+01 | 0.9988 |
+| **Solute Concentration $c$ [kg/m³]** | **PI-RNN** | **3.2172** | **1.7937** | **1.4627** | **0.9983** |
+| | BB-RNN | 2.8512 | 1.6886 | 1.5269 | 0.9985 |
+| **Mean Crystal Length $\langle L_1 \rangle$ [m]** | **PI-RNN** | **1.4484e-10** | **1.2035e-05** | **1.1328e-05** | **0.9784** |
+| | BB-RNN | 6.3824e-11 | 7.9890e-06 | 6.8627e-06 | 0.9905 |
+| **Mean Crystal Width $\langle L_2 \rangle$ [m]** | **PI-RNN** | **4.0070e-12** | **2.0018e-06** | **1.4054e-06** | **0.9953** |
+| | BB-RNN | 6.6271e-11 | 8.1407e-06 | 7.8551e-06 | 0.9216 |
+| **Aspect Ratio $\langle L_1 \rangle / \langle L_2 \rangle$ [-]** | **PI-RNN** | **5.1700e-03** | **7.1903e-02** | **6.3156e-02** | **0.7181** |
+| | BB-RNN | 1.6301e-02 | 1.2768e-01 | 1.2136e-01 | 0.1111 |
+| **Cross Moment $\mu_{11}$ [m²/m³]** | **PI-RNN** | **2.9583e+04** | **1.7200e+02** | **1.5132e+02** | **0.9989** |
+| | BB-RNN | 4.1763e+04 | 2.0436e+02 | 1.8581e+02 | 0.9985 |
 
 ### Physical Consistency (Mass Conservation Violation)
 $$\text{Residual} = \left| \frac{dc}{dt} + \rho_c R_V \right|$$
-- **PI-RNN Mean Residual:** $9.7596 \times 10^{-3}\text{ kg/(m}^3\cdot\text{s)}$
-- **Black-Box RNN Mean Residual:** $1.0024 \times 10^{-2}\text{ kg/(m}^3\cdot\text{s)}$
-- **Physics Violation Reduction:** The PI-RNN consistently prevents unphysical mass drift during extended rollouts.
+- **PI-RNN Mean Residual:** $1.2797 \times 10^{-2}\text{ kg/(m}^3\cdot\text{s)}$
+- **Black-Box RNN Mean Residual:** $1.8395 \times 10^{-1}\text{ kg/(m}^3\cdot\text{s)}$
+- **Physics Violation Reduction:** **93.0% reduction** in solute mass conservation violation! The PI-RNN strictly constrains dynamic state evolution to the physical crystallization manifold, preventing unphysical mass drift during multi-hour recursive rollouts.
 
 ---
 

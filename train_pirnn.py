@@ -63,8 +63,13 @@ def train_single_model(
             x_batch = x_batch.to(device)
             y_batch = y_batch.to(device)
 
+            # Denoising regularization: small noise injection on state features to prevent rollout drift
+            noise = torch.randn_like(x_batch) * 0.012
+            noise[:, :, 6:] = 0.0  # do not add noise to process inputs
+            x_input = x_batch + noise
+
             optimizer.zero_grad()
-            tot_loss, d_loss, p_loss = model.compute_loss(x_batch, y_batch)
+            tot_loss, d_loss, p_loss = model.compute_loss(x_input, y_batch)
             tot_loss.backward()
 
             # Gradient clipping for stable training

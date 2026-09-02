@@ -137,29 +137,35 @@ class PhysicsLossModule(nn.Module):
         input_mean, input_std : np.ndarray
             Scalers for the input parameters [cr, eps].
         """
-        # Unnormalize predicted states
+        # Unnormalize predicted states: [c, T, L1*1e4, L2*1e4, mu11*1e-4, mu00*1e-11]
         x = self.unnormalize(pred_norm)
 
         c = x[..., 0]      # Concentration [kg/m^3]
         T = x[..., 1]      # Temperature [°C]
-        mu00 = torch.clamp(x[..., 2], min=1.0e8)
-        mu10 = torch.clamp(x[..., 3], min=1.0)
-        mu01 = torch.clamp(x[..., 4], min=1.0)
-        mu11 = torch.clamp(x[..., 5], min=1.0)
+        L1_scaled = torch.clamp(x[..., 2], min=0.1)     # Length in 10^-4 m
+        L2_scaled = torch.clamp(x[..., 3], min=0.1)     # Width in 10^-4 m
+        mu11_scaled = torch.clamp(x[..., 4], min=0.01)  # Cross moment in 10^4 m^2/m^3
+        mu00_scaled = torch.clamp(x[..., 5], min=0.1)   # Count in 10^11 #/m^3
+
+        # Physical true values
+        L1_m = L1_scaled * 1.0e-4
+        L2_m = L2_scaled * 1.0e-4
+        mu11_true = mu11_scaled * 1.0e4
+        mu00_true = mu00_scaled * 1.0e11
 
         # Extract process inputs (unnormalized)
         in_std = torch.tensor(input_std, device=pred_norm.device, dtype=torch.float32)
         in_mean = torch.tensor(input_mean, device=pred_norm.device, dtype=torch.float32)
         u = input_seq_norm[..., 6:8] * in_std + in_mean
-        eps = u[..., 1]    # Stirring energy [W/kg]
+        eps = u[..., 1] * 100.0  # Stirring energy [W/kg]
 
         # 1. Thermodynamics: Solubility & supersaturation
         cs = self.calculate_solubility_torch(T)
         sigma = F.relu((c - cs) / torch.clamp(cs, min=1.0))
 
         # 2. Crystal face sizes (in um) and growth rates
-        L1_um = torch.clamp((mu10 / mu00) * 1.0e6, min=1.0)
-        L2_um = torch.clamp((mu01 / mu00) * 1.0e6, min=1.0)
+        L1_um = L1_scaled * 100.0
+        L2_um = L2_scaled * 100.0
 
         f1 = 1.0 + config.GAMMA1_GROWTH * (L1_um ** config.ALPHA1_EXPONENT)
         f2 = 1.0 + config.GAMMA2_GROWTH * (L2_um ** config.ALPHA2_EXPONENT)
@@ -168,40 +174,40 @@ class PhysicsLossModule(nn.Module):
         G2 = self.k2 * (sigma ** config.G2_EXPONENT) * f2
 
         # 3. Secondary nucleation rate
-        B = self.kS * eps * mu11 * (sigma ** config.B1_NUCLEATION)
+        B = self.kS * eps * mu11_true * (sigma ** config.B1_NUCLEATION)
 
         # 4. Volumetric growth rate
-        # RV = kV * [ G1 * mu01 + G2 * mu10 ]
-        RV = self.kV * (G1 * mu01 + G2 * mu10)
+        mu10_true = L1_m * mu00_true
+        mu01_true = L2_m * mu00_true
+        RV = self.kV * (G1 * mu01_true + G2 * mu10_true)
 
-        # 5. Discrete time finite-difference residuals along sequence
-        # Numerical time derivatives: Delta x / Delta t
-        delta_c = (c[:, 1:] - c[:, :-1]) / self.dt
-        delta_mu00 = (mu00[:, 1:] - mu00[:, :-1]) / self.dt
-        delta_mu10 = (mu10[:, 1:] - mu10[:, :-1]) / self.dt
-        delta_mu01 = (mu01[:, 1:] - mu01[:, :-1]) / self.dt
-        delta_mu11 = (mu11[:, 1:] - mu11[:, :-1]) / self.dt
-
-        # Midpoint theoretical rates
+        # 5. Theoretical rates in the scaled units of x
         rate_c = - self.rho_c * RV[:, :-1]
-        rate_mu00 = B[:, :-1]
-        rate_mu10 = (G1[:, :-1] * mu00[:, :-1])
-        rate_mu01 = (G2[:, :-1] * mu00[:, :-1])
-        rate_mu11 = (G1[:, :-1] * mu01[:, :-1] + G2[:, :-1] * mu10[:, :-1])
+        rate_L1 = (G1[:, :-1] - (B[:, :-1] / mu00_true[:, :-1]) * L1_m[:, :-1]) * 1.0e4
+        rate_L2 = (G2[:, :-1] - (B[:, :-1] / mu00_true[:, :-1]) * L2_m[:, :-1]) * 1.0e4
+        rate_mu11 = (RV[:, :-1] / self.kV) * 1.0e-4
+        rate_mu00 = B[:, :-1] * 1.0e-11
+
+        # Finite-difference numerical time derivatives: Delta x / Delta t
+        delta_c = (c[:, 1:] - c[:, :-1]) / self.dt
+        delta_L1 = (L1_scaled[:, 1:] - L1_scaled[:, :-1]) / self.dt
+        delta_L2 = (L2_scaled[:, 1:] - L2_scaled[:, :-1]) / self.dt
+        delta_mu11 = (mu11_scaled[:, 1:] - mu11_scaled[:, :-1]) / self.dt
+        delta_mu00 = (mu00_scaled[:, 1:] - mu00_scaled[:, :-1]) / self.dt
 
         # Dimensionless normalized residuals
         res_mass = (delta_c - rate_c) / (self.state_std[0] / self.dt)
-        res_mu00 = (delta_mu00 - rate_mu00) / (self.state_std[2] / self.dt)
-        res_mu10 = (delta_mu10 - rate_mu10) / (self.state_std[3] / self.dt)
-        res_mu01 = (delta_mu01 - rate_mu01) / (self.state_std[4] / self.dt)
-        res_mu11 = (delta_mu11 - rate_mu11) / (self.state_std[5] / self.dt)
+        res_L1 = (delta_L1 - rate_L1) / (self.state_std[2] / self.dt)
+        res_L2 = (delta_L2 - rate_L2) / (self.state_std[3] / self.dt)
+        res_mu11 = (delta_mu11 - rate_mu11) / (self.state_std[4] / self.dt)
+        res_mu00 = (delta_mu00 - rate_mu00) / (self.state_std[5] / self.dt)
 
         total_physics_loss = (
             torch.mean(res_mass ** 2) +
-            0.5 * torch.mean(res_mu00 ** 2) +
-            torch.mean(res_mu10 ** 2) +
-            torch.mean(res_mu01 ** 2) +
-            torch.mean(res_mu11 ** 2)
+            torch.mean(res_L1 ** 2) +
+            torch.mean(res_L2 ** 2) +
+            0.5 * torch.mean(res_mu11 ** 2) +
+            0.5 * torch.mean(res_mu00 ** 2)
         )
         return total_physics_loss
 

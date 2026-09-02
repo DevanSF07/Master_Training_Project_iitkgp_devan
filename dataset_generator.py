@@ -91,18 +91,24 @@ class DataManager:
                 num_points=num_steps,
             )
 
-            # Package state and inputs
+            # Package state and inputs with natural, well-conditioned scales:
+            # c: [40, 260] kg/m^3
+            # T: [20, 36] °C
+            # L1: [0.5, 5.5] x 10^-4 m
+            # L2: [0.4, 2.8] x 10^-4 m
+            # mu11: [0.1, 2.5] x 10^4 m^2/m^3
+            # mu00: [1.5, 3.5] x 10^11 #/m^3
             states = np.column_stack([
                 res["concentration"],
                 res["temperature"],
-                res["mu00"],
-                res["mu10"],
-                res["mu01"],
-                res["mu11"],
+                res["mean_L1"] * 1.0e4,
+                res["mean_L2"] * 1.0e4,
+                res["mu11"] * 1.0e-4,
+                res["mu00"] * 1.0e-11,
             ])
             inputs = np.column_stack([
-                np.full(num_steps, cr),
-                np.full(num_steps, eps),
+                np.full(num_steps, cr * 1.0e3),
+                np.full(num_steps, eps / 100.0),
             ])
 
             trajectories.append({
@@ -122,8 +128,8 @@ class DataManager:
     def create_sliding_windows(
         self,
         trajectories: list[Dict[str, np.ndarray]],
-        window_size: int = 25,
-        stride: int = 5,
+        window_size: int = 15,
+        stride: int = 2,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Converts raw batch trajectories into fixed sliding sequence windows."""
         seq_list = []
@@ -152,7 +158,7 @@ class DataManager:
     def prepare_data(
         self,
         num_batches: int = 40,
-        window_size: int = 25,
+        window_size: int = 15,
         batch_size: int = 16,
     ) -> Tuple[DataLoader, DataLoader, list[Dict[str, np.ndarray]], Dict[str, np.ndarray]]:
         """
