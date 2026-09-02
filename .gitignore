@@ -9,8 +9,7 @@ env/
 venv/
 ENV/
 
-# Checkpoints & model artifacts
-checkpoints/*.pth
+
 
 # OS specific
 .DS_Store
