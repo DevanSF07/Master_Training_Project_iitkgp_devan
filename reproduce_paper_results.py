@@ -155,19 +155,26 @@ def generate_figure_6(simulator: BatchCrystallizerMOM):
     markers = ["o", "s", "^", "d"]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
+    fig_ar, ax_ar = plt.subplots(figsize=(8, 5.5))
 
     for cr_idx, cr in enumerate(cooling_rates):
         final_L1 = []
         final_L2 = []
+        final_AR = []
         for eps in eps_values:
             res = simulator.simulate(cooling_rate=cr, epsilon=eps, num_points=80)
-            final_L1.append(res["mean_L1"][-1] * 1.0e4)
-            final_L2.append(res["mean_L2"][-1] * 1.0e4)
+            l1_val = res["mean_L1"][-1] * 1.0e4
+            l2_val = res["mean_L2"][-1] * 1.0e4
+            final_L1.append(l1_val)
+            final_L2.append(l2_val)
+            final_AR.append(l1_val / l2_val)
 
         ax1.plot(eps_values, final_L1, color=colors[cr_idx], marker=markers[cr_idx],
                  label=f"cr = {cr_labels[cr_idx]}")
         ax2.plot(eps_values, final_L2, color=colors[cr_idx], marker=markers[cr_idx],
                  label=f"cr = {cr_labels[cr_idx]}")
+        ax_ar.plot(eps_values, final_AR, color=colors[cr_idx], marker=markers[cr_idx],
+                   label=f"cr = {cr_labels[cr_idx]}")
 
     ax1.set_xlabel("ε [W/kg]")
     ax1.set_ylabel("⟨L₁⟩ [m] × 10⁻⁴")
@@ -183,9 +190,19 @@ def generate_figure_6(simulator: BatchCrystallizerMOM):
     ax2.grid(True, linestyle="--")
     ax2.legend(loc="upper right", frameon=True)
 
-    plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, "fig6_cooling_stirring_effects.png"), dpi=300)
-    plt.close()
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUTPUT_DIR, "fig6_cooling_stirring_effects.png"), dpi=300)
+    plt.close(fig)
+
+    ax_ar.set_xlabel("ε [W/kg]")
+    ax_ar.set_ylabel("⟨L₁⟩ / ⟨L₂⟩ [-]")
+    ax_ar.set_title("Fig. 7: Final Aspect Ratio vs Stirring Power")
+    ax_ar.set_ylim(1.4, 2.6)
+    ax_ar.grid(True, linestyle="--")
+    ax_ar.legend(loc="upper right", frameon=True)
+    fig_ar.tight_layout()
+    fig_ar.savefig(os.path.join(OUTPUT_DIR, "fig7_aspect_ratio_cooling_stirring.png"), dpi=300)
+    plt.close(fig_ar)
 
 
 def generate_figures_8_and_9(simulator: BatchCrystallizerMOM):
