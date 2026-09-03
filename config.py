@@ -71,21 +71,7 @@ MU10_0 = np.sum(INITIAL_WEIGHTS * INITIAL_L1)
 MU01_0 = np.sum(INITIAL_WEIGHTS * INITIAL_L2)
 MU11_0 = np.sum(INITIAL_WEIGHTS * INITIAL_L1 * INITIAL_L2)
 
+
 MEAN_L1_0 = MU10_0 / MU00_0  # ~1.075e-4 m (~107.5 um)
 MEAN_L2_0 = MU01_0 / MU00_0  # ~6.026e-5 m (~60.3 um)
 ASPECT_RATIO_0 = MEAN_L1_0 / MEAN_L2_0  # ~1.78
-
-# ==============================================================================
-# 5. MACHINE LEARNING & PI-RNN CONFIGURATION
-# ==============================================================================
-PI_RNN_CONFIG = {
-    "input_dim": 8,         # [c, T, L1*1e4, L2*1e4, mu11*1e-4, mu00*1e-11, cr*1e3, eps/100]
-    "hidden_dim": 64,       # Hidden units in GRU
-    "num_layers": 2,        # Stacked GRU layers
-    "output_dim": 6,        # Predicted next state: [c, T, L1*1e4, L2*1e4, mu11*1e-4, mu00*1e-11]
-    "learning_rate": 1e-3,
-    "batch_size": 16,
-    "num_epochs": 80,
-    "physics_weight": 0.05, # Calibrated weight for physical residual loss (gamma)
-    "sequence_length": 15,  # Moving horizon window
-}
