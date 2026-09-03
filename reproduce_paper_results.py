@@ -47,21 +47,47 @@ plt.rcParams.update({
 def generate_figure_1(simulator: BatchCrystallizerMOM):
     """Fig. 1: Solute concentration and solubility vs temperature."""
     print("Generating Figure 1: Solute concentration and solubility vs temperature...")
-    res = simulator.simulate(T_seed=35.0, T_final=25.0, cooling_rate=config.COOLING_RATE_NOMINAL)
+    
+    # 1. Full equilibrium solubility line from 25.0 to 35.2 °C
+    T_sol = np.linspace(25.0, 35.2, 200)
+    cs_sol = np.array([calculate_solubility(t) for t in T_sol])
+
+    # 2. Main cooling trajectory from seeding temp (Ts = 34.0 °C) down to 25.0 °C
+    res = simulator.simulate(T_seed=34.0, T_final=25.0, cooling_rate=config.COOLING_RATE_NOMINAL, num_points=120)
+
+    # 3. Construct exact actual concentration path:
+    #    a) Pre-cooling from Th = 35.2 °C to Ts = 34.0 °C at constant c = 240.0 kg/m^3
+    #    b) Vertical desaturation drop upon seeding at 34.0 °C down to near solubility line
+    #    c) Dynamic cooling trajectory from 34.0 °C to 25.0 °C
+    cs_at_seeding = float(calculate_solubility(34.0))
+    T_actual = np.concatenate([
+        [35.2, 34.0],              # Pre-cooling at constant concentration
+        [34.0],                    # Rapid desaturation drop at seeding
+        res["temperature"]         # Cooling desaturation path down to 25.0 °C
+    ])
+    c_actual = np.concatenate([
+        [240.0, 240.0],            # Pre-cooling
+        [cs_at_seeding],           # Drops to solubility at seeding
+        res["concentration"]       # Trajectory
+    ])
 
     plt.figure(figsize=(7, 5))
-    plt.plot(res["temperature"], res["concentration"], "b-", label="Actual concentration")
-    plt.plot(res["temperature"], res["solubility"], "r-", label="Solubility line")
-    plt.plot([35.2], [config.C0_SOLUTE], "mo", markersize=6, label="Concentrated solution (35.2°C)")
-    plt.plot([35.0], [config.C0_SOLUTE], "g*", markersize=10, label="Seeding (35.0°C)")
+    # Blue solid actual concentration trajectory
+    plt.plot(T_actual, c_actual, color="#1e3a8a", linewidth=2.2, label="Actual concentration")
+    # Red dashed solubility curve
+    plt.plot(T_sol, cs_sol, color="#dc2626", linestyle="--", linewidth=2.0, label="Solubility line")
+    # Green circle at concentrated hot solution (35.2 °C, 240 kg/m^3)
+    plt.plot([35.2], [240.0], color="#16a34a", marker="o", markersize=6.5, linestyle="None", label="Concentrated solution")
+    # Purple star at seeding point (34.0 °C, 240 kg/m^3)
+    plt.plot([34.0], [240.0], color="#9333ea", marker="*", markersize=11.0, linestyle="None", label="Seeding")
 
-    plt.xlabel("Temperature [°C]")
-    plt.ylabel("Concentration [kg/m³]")
-    plt.title("Fig. 1: Solute Concentration and Solubility vs Temperature")
-    plt.xlim(24.5, 36.0)
-    plt.ylim(40, 260)
-    plt.grid(True, linestyle="--")
-    plt.legend(loc="upper left", frameon=True)
+    plt.xlabel("Temperature [°C]", fontsize=12)
+    plt.ylabel("Concentration [kg/m³]", fontsize=12)
+    plt.title("Fig. 1: Solute Concentration and Solubility vs Temperature", fontsize=13)
+    plt.xlim(25.0, 35.5)
+    plt.ylim(60, 255)
+    plt.grid(True, linestyle=":", alpha=0.6)
+    plt.legend(loc="upper left", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
     plt.tight_layout()
     plt.savefig(os.path.join(OUTPUT_DIR, "fig1_concentration_solubility.png"), dpi=300)
     plt.close()
