@@ -97,35 +97,48 @@ def generate_figure_3(simulator: BatchCrystallizerMOM):
     """Fig. 3: Time evolution of mean crystal sizes for different stirring powers."""
     print("Generating Figure 3: Time evolution of mean crystal sizes...")
     stirring_powers = [250, 350, 450, 550]
-    colors = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd"]
-    markers = ["s", "^", "o", "d"]
+    
+    # Exact styling from Figure 3 of the paper:
+    styles = [
+        {"color": "#1e3a8a", "linestyle": "-",  "marker": "o", "label": "ε = 250 W/kg"},
+        {"color": "#b91c1c", "linestyle": ":",  "marker": "o", "label": "ε = 350 W/kg"},
+        {"color": "#15803d", "linestyle": "-.", "marker": "o", "label": "ε = 450 W/kg"},
+        {"color": "#7e22ce", "linestyle": "--", "marker": "s", "label": "ε = 550 W/kg"},
+    ]
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 9), sharex=True)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 9.5), sharex=True)
 
     for idx, eps in enumerate(stirring_powers):
         res = simulator.simulate(epsilon=float(eps), num_points=120)
         t = res["time"]
-        L1_scaled = res["mean_L1"] * 1.0e4  # Convert to x 10^-4 m
+        L1_scaled = res["mean_L1"] * 1.0e4  # in units of 10^-4 m
         L2_scaled = res["mean_L2"] * 1.0e4
 
-        mark_step = len(t) // 8
-        ax1.plot(t, L1_scaled, color=colors[idx], label=f"ε = {eps} W/kg",
-                 marker=markers[idx], markevery=mark_step, markersize=5)
-        ax2.plot(t, L2_scaled, color=colors[idx], label=f"ε = {eps} W/kg",
-                 marker=markers[idx], markevery=mark_step, markersize=5)
+        st = styles[idx]
+        mark_step = max(1, len(t) // 10)
+        ax1.plot(t, L1_scaled, color=st["color"], linestyle=st["linestyle"],
+                 marker=st["marker"], markevery=mark_step, markersize=6, label=st["label"], linewidth=2.0)
+        ax2.plot(t, L2_scaled, color=st["color"], linestyle=st["linestyle"],
+                 marker=st["marker"], markevery=mark_step, markersize=6, label=st["label"], linewidth=2.0)
 
-    ax1.set_ylabel("⟨L₁⟩ [m] × 10⁻⁴")
-    ax1.set_title("Fig. 3(a): Mean Length ⟨L₁⟩ Evolution")
-    ax1.set_ylim(0.5, 5.2)
-    ax1.grid(True, linestyle="--")
-    ax1.legend(loc="lower right", frameon=True)
+    # Subplot (a) - Mean Length
+    ax1.set_ylabel("⟨L₁⟩ [m]", fontsize=12)
+    ax1.text(0.0, 1.02, r"$\times 10^{-4}$", transform=ax1.transAxes, fontsize=11)
+    ax1.set_title("a)", fontsize=13, y=-0.22)
+    ax1.set_xlim(0, 12000)
+    ax1.set_ylim(1.0, 5.0)
+    ax1.grid(True, linestyle=":", alpha=0.6)
+    ax1.legend(loc="lower right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
 
-    ax2.set_xlabel("Time [s]")
-    ax2.set_ylabel("⟨L₂⟩ [m] × 10⁻⁴")
-    ax2.set_title("Fig. 3(b): Mean Width ⟨L₂⟩ Evolution")
-    ax2.set_ylim(0.4, 2.6)
-    ax2.grid(True, linestyle="--")
-    ax2.legend(loc="lower right", frameon=True)
+    # Subplot (b) - Mean Width
+    ax2.set_xlabel("Time [s]", fontsize=12)
+    ax2.set_ylabel("⟨L₂⟩ [m]", fontsize=12)
+    ax2.text(0.0, 1.02, r"$\times 10^{-4}$", transform=ax2.transAxes, fontsize=11)
+    ax2.set_title("b)", fontsize=13, y=-0.26)
+    ax2.set_xlim(0, 12000)
+    ax2.set_ylim(0.5, 2.5)
+    ax2.grid(True, linestyle=":", alpha=0.6)
+    ax2.legend(loc="lower right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
 
     plt.tight_layout()
     plt.savefig(os.path.join(OUTPUT_DIR, "fig3_mean_crystal_sizes.png"), dpi=300)

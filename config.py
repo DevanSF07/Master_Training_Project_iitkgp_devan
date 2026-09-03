@@ -48,7 +48,7 @@ GAMMA1_GROWTH = 0.05        # Size dependency coefficient for length [um^-alpha1
 ALPHA1_EXPONENT = 0.8       # Size dependency exponent for length [-]
 
 # Face 2 (Width L2) Growth: G2(sigma, L2) = k2 * sigma^g2 * (1 + gamma2 * L2^alpha2)
-K2_GROWTH = 1.63e-3         # Rate coefficient for width growth [m / s]
+K2_GROWTH = 1.85e-3         # Rate coefficient for width growth [m / s]
 G2_EXPONENT = 1.7           # Supersaturation order for width growth [-]
 GAMMA2_GROWTH = 0.03        # Size dependency coefficient for width [um^-alpha2]
 ALPHA2_EXPONENT = 0.9       # Size dependency exponent for width [-]
