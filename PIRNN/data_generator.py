@@ -14,12 +14,14 @@ import torch
 from typing import Dict, Any, List, Tuple, Optional
 
 from .temperature_profiles import sample_random_profile
-from .plant_simulator import DynamicCrystallizerPlant
+from .plant_simulator import DynamicCrystallizerPlant, apelblat_solubility
 
 
 class CrystallizationDatasetGenerator:
     """
     Automated synthesis engine for diverse 2D crystallization batches.
+    Ensures strict thermodynamic validity (T >= 25.0 °C), metastable seeding
+    supersaturation (sigma_0 in [0.015, 0.040]), and physical plate geometry (L1 > L2).
     """
 
     def __init__(
@@ -56,19 +58,26 @@ class CrystallizationDatasetGenerator:
         for i in range(num_batches):
             p_type = profile_families[i % len(profile_families)]
 
-            # Randomized conditions
-            T_seed = float(rng.uniform(29.0, 35.0))
-            T_final = float(rng.uniform(20.0, min(T_seed - 4.0, 26.0)))
-            # Batch duration in seconds (between 7200 s and 16800 s, rounded to dt_sample)
-            raw_dur = rng.uniform(7200.0, 16800.0)
+            # 1. Thermodynamically valid temperature range (strictly monotonic Apelblat regime)
+            T_seed = float(rng.uniform(33.0, 35.2))
+            T_final = float(rng.uniform(25.0, 27.0))
+
+            # 2. Metastable zone seeding (1.5% to 4.0% initial supersaturation)
+            sigma_0 = float(rng.uniform(0.015, 0.040))
+            cs_seed = apelblat_solubility(T_seed)
+            c0 = float(cs_seed * (1.0 + sigma_0))
+
+            # Batch duration in seconds (between 7200 s and 14400 s, rounded to dt_sample)
+            raw_dur = rng.uniform(7200.0, 14400.0)
             duration = math.ceil(raw_dur / self.dt_sample) * self.dt_sample
 
-            # Seed properties
-            seed_mass_frac = float(rng.uniform(0.008, 0.035))
-            mean_L1_seed = float(rng.uniform(60.0e-6, 160.0e-6))
-            mean_L2_seed = float(rng.uniform(35.0e-6, 95.0e-6))
+            # 3. Seed crystal plate geometry: L2 in [35, 55] um, AR in [1.8, 2.2], L1 = L2 * AR
+            seed_mass_frac = float(rng.uniform(0.010, 0.030))
+            mean_L2_seed = float(rng.uniform(35.0e-6, 55.0e-6))
+            ar_seed = float(rng.uniform(1.8, 2.2))
+            mean_L1_seed = float(mean_L2_seed * ar_seed)
 
-            # Stirring power and kinetic perturbations (for drift studies)
+            # Stirring power and kinetic drift perturbations
             epsilon = float(rng.uniform(200.0, 500.0))
             lam_k1 = float(rng.uniform(0.88, 1.12))
             lam_k2 = float(rng.uniform(0.88, 1.12))
@@ -83,11 +92,12 @@ class CrystallizationDatasetGenerator:
                 rng=rng,
             )
 
-            # Simulate clean trajectory
+            # Simulate clean trajectory with closed bivariate moment differential equations
             traj_clean = self.plant.simulate_batch(
                 profile=profile,
                 duration=duration,
                 dt_sample=self.dt_sample,
+                c0=c0,
                 seed_mass_fraction=seed_mass_frac,
                 mean_L1_seed=mean_L1_seed,
                 mean_L2_seed=mean_L2_seed,
@@ -97,10 +107,12 @@ class CrystallizationDatasetGenerator:
                 lambda_kS=lam_kS,
             )
 
-            # Add sensor noise
+            # Add sensor noise (preserving both clean ground-truth and noisy measurements)
             traj = self.plant.inject_sensor_noise(traj_clean, seed=int(rng.integers(1e7)))
             traj["batch_id"] = i
             traj["profile_type"] = p_type
+            traj["c0"] = c0
+            traj["sigma_0"] = sigma_0
             all_batches.append(traj)
 
             # Metadata summary
@@ -109,11 +121,14 @@ class CrystallizationDatasetGenerator:
                 "profile_type": p_type,
                 "T_seed": T_seed,
                 "T_final": T_final,
+                "c0_kg_m3": c0,
+                "sigma_0": sigma_0,
                 "duration_s": duration,
                 "num_steps": len(traj["time"]),
                 "seed_mass_fraction": seed_mass_frac,
                 "mean_L1_seed_um": mean_L1_seed * 1e6,
                 "mean_L2_seed_um": mean_L2_seed * 1e6,
+                "seed_aspect_ratio": ar_seed,
                 "epsilon_W_kg": epsilon,
                 "lambda_k1": lam_k1,
                 "lambda_k2": lam_k2,
@@ -125,16 +140,16 @@ class CrystallizationDatasetGenerator:
             })
 
             if (i + 1) % 10 == 0 or (i + 1) == num_batches:
-                print(f"    [Batch {i+1:3d}/{num_batches:3d}] Family: {p_type:18s} | Ts={T_seed:.1f}°C -> Tf={T_final:.1f}°C | Final L1={traj['mean_L1'][-1]*1e6:.1f} µm, AR={traj['aspect_ratio'][-1]:.2f}")
+                print(f"    [Batch {i+1:3d}/{num_batches:3d}] Family: {p_type:18s} | Ts={T_seed:.1f}°C -> Tf={T_final:.1f}°C | c0={c0:.1f} kg/m³ (σ0={sigma_0:.3f}) | Final L1={traj['mean_L1'][-1]*1e6:.1f} µm, AR={traj['aspect_ratio'][-1]:.2f}")
 
-        # Partition by batch indices
+        # Partition by batch indices (train / val / test)
         n_train = int(num_batches * train_ratio)
         n_val = int(num_batches * val_ratio)
         train_batches = all_batches[:n_train]
         val_batches = all_batches[n_train : n_train + n_val]
         test_batches = all_batches[n_train + n_val :]
 
-        # Extract rolling windows (for multi-step ahead RNN training)
+        # Extract rolling windows (computed from train set normalization only)
         norm_stats = self._compute_normalization(train_batches)
         train_windows = self._extract_rolling_windows(train_batches, norm_stats)
         val_windows = self._extract_rolling_windows(val_batches, norm_stats)
@@ -154,18 +169,8 @@ class CrystallizationDatasetGenerator:
             "val_windows": val_windows,
             "test_windows": test_windows,
             "norm_stats": norm_stats,
-            "config": {
-                "sampling_interval": self.dt_sample,
-                "history_len": self.history_len,
-                "forecast_horizon": self.forecast_horizon,
-                "num_batches": num_batches,
-                "n_train": len(train_batches),
-                "n_val": len(val_batches),
-                "n_test": len(test_batches),
-            },
         }
 
-        # Save individual split files
         torch.save({
             "batches": train_batches,
             "windows": train_windows,
@@ -192,13 +197,12 @@ class CrystallizationDatasetGenerator:
         return bundle
 
     def _compute_normalization(self, batches: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Calculates global mean and std for states and inputs."""
+        """Calculates global mean and std for states and inputs based on training batches."""
         all_states = []
         all_inputs = []
 
         for b in batches:
             N = len(b["time"])
-            # State vector: [T, c, mean_L1, mean_L2, aspect_ratio, log10(mu00), log10(mu11)]
             mu00_log = np.log10(np.maximum(b["mu00_meas"], 1e-5))
             mu11_log = np.log10(np.maximum(b["mu11_meas"], 1e-5))
             
@@ -246,15 +250,17 @@ class CrystallizationDatasetGenerator:
     ) -> Dict[str, torch.Tensor]:
         """
         Extracts rolling window tensors:
-        - history: [B, L, num_states + num_inputs]
-        - future_inputs: [B, H, num_inputs]
-        - target_increments: [B, H, num_states] (Delta y = y(t+k) - y(t))
-        - ground_truth_states: [B, H, num_states] (absolute states for evaluation)
+        - history: [B, L, num_states + num_inputs] (past noisy measurements)
+        - future_inputs: [B, H, num_inputs] (cooling schedule and stirring)
+        - target_increments: [B, H, num_states] (Delta y from y(t-1) in normalized space)
+        - target_absolute: [B, H, num_states] (clean ground truth for rigorous evaluation)
+        - target_noisy: [B, H, num_states] (noisy sensor observations)
         """
         hist_list = []
         fut_inp_list = []
         target_inc_list = []
         target_abs_list = []
+        target_noisy_list = []
 
         s_mean = norm_stats["state_mean"].numpy()
         s_std = norm_stats["state_std"].numpy()
@@ -269,21 +275,34 @@ class CrystallizationDatasetGenerator:
             if N < (L + H):
                 continue
 
-            mu00_log = np.log10(np.maximum(b["mu00_meas"], 1e-5))
-            mu11_log = np.log10(np.maximum(b["mu11_meas"], 1e-5))
-
-            # Raw and normalized states
-            states_raw = np.column_stack([
+            # Measured states (with sensor noise)
+            mu00_log_meas = np.log10(np.maximum(b["mu00_meas"], 1e-5))
+            mu11_log_meas = np.log10(np.maximum(b["mu11_meas"], 1e-5))
+            states_meas = np.column_stack([
                 b["T_meas"],
                 b["c_meas"],
                 b["mean_L1_meas"],
                 b["mean_L2_meas"],
                 b["aspect_ratio_meas"],
-                mu00_log,
-                mu11_log,
+                mu00_log_meas,
+                mu11_log_meas,
             ])
-            states_norm = (states_raw - s_mean) / s_std
+            states_norm = (states_meas - s_mean) / s_std
 
+            # Clean ground-truth states
+            mu00_log_clean = np.log10(np.maximum(b["mu00"], 1e-5))
+            mu11_log_clean = np.log10(np.maximum(b["mu11"], 1e-5))
+            states_clean = np.column_stack([
+                b["T"],
+                b["c"],
+                b["mean_L1"],
+                b["mean_L2"],
+                b["aspect_ratio"],
+                mu00_log_clean,
+                mu11_log_clean,
+            ])
+
+            # Process inputs
             inputs_raw = np.column_stack([
                 b["cooling_rate"],
                 np.full(N, b["epsilon"]),
@@ -292,7 +311,7 @@ class CrystallizationDatasetGenerator:
 
             # Sliding windows
             for t in range(L, N - H):
-                # History: past L steps of [normalized states, normalized inputs]
+                # History: past L steps of [normalized noisy states, normalized inputs]
                 h_states = states_norm[t - L : t]
                 h_inputs = inputs_norm[t - L : t]
                 hist_window = np.hstack([h_states, h_inputs])
@@ -308,11 +327,13 @@ class CrystallizationDatasetGenerator:
                 hist_list.append(hist_window)
                 fut_inp_list.append(f_inputs)
                 target_inc_list.append(target_increments)
-                target_abs_list.append(states_raw[t : t + H])
+                target_abs_list.append(states_clean[t : t + H])
+                target_noisy_list.append(states_meas[t : t + H])
 
         return {
             "history": torch.tensor(np.array(hist_list), dtype=torch.float32),
             "future_inputs": torch.tensor(np.array(fut_inp_list), dtype=torch.float32),
             "target_increments": torch.tensor(np.array(target_inc_list), dtype=torch.float32),
             "target_absolute": torch.tensor(np.array(target_abs_list), dtype=torch.float32),
+            "target_noisy": torch.tensor(np.array(target_noisy_list), dtype=torch.float32),
         }

@@ -3,7 +3,7 @@ PyTorch Dataset and DataLoader Utilities for Crystallization Time-Series.
 
 Provides:
 - CrystallizerWindowDataset: PyTorch Dataset for rolling-window training
-- Extraction of both 7-state physical representations and 11-moment representations
+- Support for clean ground-truth and noisy measurement evaluation targets
 - Tensor normalization and inverse scaling utilities
 """
 
@@ -20,7 +20,8 @@ class CrystallizerWindowDataset(Dataset):
     - history: [L, num_features]
     - future_inputs: [H, num_inputs]
     - target_increments: [H, num_targets] (Delta y = y(t+k) - y(t))
-    - target_absolute: [H, num_targets] (raw ground truth for evaluation)
+    - target_absolute: [H, num_targets] (clean ground truth for rigorous physics validation)
+    - target_noisy: [H, num_targets] (noisy measurement targets for sensor error scoring)
     """
 
     def __init__(self, windows_dict: Dict[str, torch.Tensor]):
@@ -28,6 +29,7 @@ class CrystallizerWindowDataset(Dataset):
         self.future_inputs = windows_dict["future_inputs"]
         self.target_increments = windows_dict["target_increments"]
         self.target_absolute = windows_dict["target_absolute"]
+        self.target_noisy = windows_dict.get("target_noisy", self.target_absolute)
 
     def __len__(self) -> int:
         return self.history.shape[0]

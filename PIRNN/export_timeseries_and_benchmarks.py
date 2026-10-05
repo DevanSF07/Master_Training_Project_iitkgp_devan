@@ -78,9 +78,6 @@ def export_existing_batches_to_timeseries(
             "mu20": b["mu20"],
             "mu11": b["mu11"],
             "mu02": b["mu02"],
-            "mu30": b["mu30"],
-            "mu21": b["mu21"],
-            "mu12": b["mu12"],
         })
 
         # Save individual batch CSV

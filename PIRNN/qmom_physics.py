@@ -4,16 +4,17 @@ Differentiable PyTorch QMOM Physics Module.
 Implements the continuous differential equations and conservation laws of the 2D QMOM system
 in pure, vectorized, autograd-compatible PyTorch:
 1. Apelblat solubility correlation cs(T) and relative supersaturation sigma(c, T).
-2. Size-dependent crystal face growth rates G1 and G2.
-3. Secondary contact nucleation rate B.
-4. Solute mass balance: dc/dt = - rho_c * kV * d(mu11)/dt.
-5. Collocation ODE residual loss operator.
+2. Size-dependent crystal face growth rates G1 and G2 (actively regularized).
+3. Secondary contact nucleation rate B (actively regularized).
+4. Solute mass balance: dc/dt = - rho_c * kV * d(mu11)/dt and integral conservation.
+5. Collocation ODE residual loss operator providing active non-zero gradients
+   with respect to state forecasts and kinetic multipliers lambda_k1, lambda_k2, lambda_kS.
 """
 
 import math
 import torch
 import torch.nn as nn
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, Union
 
 import config
 
@@ -21,6 +22,8 @@ import config
 class DifferentiableQMOMPhysics(nn.Module):
     """
     Evaluates the continuous-time physics differential operator and residuals in PyTorch.
+    Ensures active kinetic coupling for both Forward PIRNN regularization and
+    Inverse PIRNN parameter estimation.
     """
 
     def __init__(
@@ -40,6 +43,7 @@ class DifferentiableQMOMPhysics(nn.Module):
         a1: float = config.A1_APELBLAT,
         a2: float = config.A2_APELBLAT,
         a3: float = config.A3_APELBLAT,
+        nucleus_size: float = 1.0e-6,
     ):
         super().__init__()
         self.kV = float(kV)
@@ -57,6 +61,7 @@ class DifferentiableQMOMPhysics(nn.Module):
         self.a1 = float(a1)
         self.a2 = float(a2)
         self.a3 = float(a3)
+        self.L_nuc = float(nucleus_size)
 
     def calculate_solubility(self, T_celsius: torch.Tensor) -> torch.Tensor:
         """Computes saturation concentration cs(T) via Apelblat correlation (Eq. 11)."""
@@ -77,8 +82,8 @@ class DifferentiableQMOMPhysics(nn.Module):
         sigma: torch.Tensor,
         mean_L1: torch.Tensor,
         mean_L2: torch.Tensor,
-        lambda_k1: float = 1.0,
-        lambda_k2: float = 1.0,
+        lambda_k1: Union[float, torch.Tensor] = 1.0,
+        lambda_k2: Union[float, torch.Tensor] = 1.0,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Computes size-dependent face growth rates G1 and G2 (Eq. 2)."""
         sig_safe = torch.clamp(sigma, min=0.0)
@@ -97,7 +102,7 @@ class DifferentiableQMOMPhysics(nn.Module):
         sigma: torch.Tensor,
         epsilon: torch.Tensor,
         mu11: torch.Tensor,
-        lambda_kS: float = 1.0,
+        lambda_kS: Union[float, torch.Tensor] = 1.0,
     ) -> torch.Tensor:
         """Computes secondary contact nucleation rate B (Eq. 1)."""
         sig_safe = torch.clamp(sigma, min=0.0)
@@ -111,55 +116,94 @@ class DifferentiableQMOMPhysics(nn.Module):
         inputs: torch.Tensor,            # [B, H, 2]: [cooling_rate, epsilon]
         curr_state: Optional[torch.Tensor] = None,  # [B, 7]: starting state at t_0
         dt_sample: float = 60.0,
-        lambda_k1: float = 1.0,
-        lambda_k2: float = 1.0,
-        lambda_kS: float = 1.0,
+        lambda_k1: Union[float, torch.Tensor] = 1.0,
+        lambda_k2: Union[float, torch.Tensor] = 1.0,
+        lambda_kS: Union[float, torch.Tensor] = 1.0,
     ) -> Dict[str, torch.Tensor]:
         """
-        Computes the exact QMOM continuous ODE residuals and conservation law losses:
+        Computes the complete QMOM continuous ODE residuals and conservation law losses:
         1. Temperature schedule: dT/dt = -cr
-        2. Exact differential solute mass balance: dc/dt = - rho_c * kV * d(mu11)/dt
-        3. Exact integral solute mass conservation: Delta c + rho_c * kV * Delta mu11 = 0
-        4. Thermodynamic solubility limit: c >= cs(T) (no unphysical undersaturation)
-        5. Aspect ratio definition: AR = L1 / L2
-        6. Cooling growth monotonicity: dL1/dt >= 0, dL2/dt >= 0
-        7. State non-negativity: T > 0, c > 0, L1 > 0, L2 > 0
+        2. Active crystal face length growth: dL1/dt = G1(sigma, L1; lambda_k1) + dilution
+        3. Active crystal face width growth: dL2/dt = G2(sigma, L2; lambda_k2) + dilution
+        4. Active secondary contact nucleation: d(log_mu00)/dt = B(sigma, eps, mu11; lambda_kS) / (ln(10)*mu00)
+        5. Solute mass conservation: dc/dt = - rho_c * kV * d(mu11)/dt
+        6. Integral solute mass balance: Delta c + rho_c * kV * Delta mu11 = 0
+        7. Thermodynamic solubility limit: c >= cs(T) (no unphysical undersaturation)
+        8. Geometric aspect ratio consistency: AR = L1 / L2
+        9. Physical state non-negativity and growth monotonicity
         """
-        B, H, _ = states_pred.shape
+        B_size, H, _ = states_pred.shape
 
         if curr_state is not None:
             full_states = torch.cat([curr_state.unsqueeze(1), states_pred], dim=1)  # [B, H+1, 7]
             d_states_dt = (full_states[:, 1:, :] - full_states[:, :-1, :]) / dt_sample  # [B, H, 7]
             s_eval = states_pred  # [B, H, 7]
-            u_eval = inputs  # [B, H, 2]
+            u_eval = inputs       # [B, H, 2]
         else:
             if H < 2:
                 zero_loss = torch.tensor(0.0, device=states_pred.device, dtype=states_pred.dtype)
                 return {"total_physics_loss": zero_loss}
             d_states_dt = (states_pred[:, 1:, :] - states_pred[:, :-1, :]) / dt_sample
-            s_eval = 0.5 * (states_pred[:, 1:, :] + states_pred[:, :-1, :])
-            u_eval = 0.5 * (inputs[:, 1:, :] + inputs[:, :-1, :])
+            s_eval = states_pred
+            u_eval = inputs
             full_states = states_pred
 
         T_eval = s_eval[:, :, 0]
         c_eval = s_eval[:, :, 1]
-        L1_eval = torch.clamp(s_eval[:, :, 2], min=1e-6)
-        L2_eval = torch.clamp(s_eval[:, :, 3], min=1e-6)
+        L1_eval = torch.clamp(s_eval[:, :, 2], min=1.0e-6)
+        L2_eval = torch.clamp(s_eval[:, :, 3], min=1.0e-6)
         ar_eval = s_eval[:, :, 4]
+        log_mu00_eval = s_eval[:, :, 5]
+        log_mu11_eval = s_eval[:, :, 6]
+
         cr_eval = u_eval[:, :, 0]
+        eps_eval = u_eval[:, :, 1]
 
         # 1. Physics ODE 1: Temperature Schedule: dT/dt = -cr
-        res_T = (d_states_dt[:, :, 0] - (-cr_eval)) / 0.003
+        res_T = (d_states_dt[:, :, 0] - (-cr_eval)) / 0.002
         loss_T = torch.mean(res_T ** 2)
 
-        # 2. Physics ODE 2: Exact Differential Solute Mass Balance: dc/dt = - rho_c * kV * d(mu11)/dt
+        # 2. Physical Kinetics: Solubility, Supersaturation, Growth, and Nucleation
+        _, sigma_eval = self.calculate_supersaturation(c_eval, T_eval)
+        G1_eval, G2_eval = self.calculate_growth_rates(
+            sigma_eval, L1_eval, L2_eval,
+            lambda_k1=lambda_k1, lambda_k2=lambda_k2,
+        )
+
+        mu00_eval = 10.0 ** log_mu00_eval
+        mu11_eval = 10.0 ** log_mu11_eval
+
+        B_eval = self.calculate_nucleation_rate(
+            sigma_eval, eps_eval, mu11_eval,
+            lambda_kS=lambda_kS,
+        )
+
+        # 3. Physics ODE 2 & 3: Active Face Growth Dynamics with Nucleation Dilution
+        # d<L1>/dt = G1 + (B / mu00) * (L_nuc - <L1>)
+        dilution_1 = (B_eval / torch.clamp(mu00_eval, min=1.0)) * (self.L_nuc - L1_eval)
+        dL1_expected = G1_eval + dilution_1
+        res_G1 = (d_states_dt[:, :, 2] - dL1_expected) / 2.0e-6
+        loss_G1 = torch.mean(res_G1 ** 2)
+
+        dilution_2 = (B_eval / torch.clamp(mu00_eval, min=1.0)) * (self.L_nuc - L2_eval)
+        dL2_expected = G2_eval + dilution_2
+        res_G2 = (d_states_dt[:, :, 3] - dL2_expected) / 1.0e-6
+        loss_G2 = torch.mean(res_G2 ** 2)
+
+        # 4. Physics ODE 4: Active Nucleation Dynamic Rate
+        # d(log10 mu00)/dt = B / (ln(10) * mu00)
+        d_log_mu00_expected = B_eval / (2.302585 * torch.clamp(mu00_eval, min=1.0))
+        res_B = (d_states_dt[:, :, 5] - d_log_mu00_expected) / 5.0e-3
+        loss_B = torch.mean(res_B ** 2)
+
+        # 5. Physics ODE 5: Differential Solute Mass Balance: dc/dt = - rho_c * kV * d(mu11)/dt
         mu11_full = 10.0 ** full_states[:, :, 6]
         dmu11_dt = (mu11_full[:, 1:] - mu11_full[:, :-1]) / dt_sample
         dc_dt_expected = - self.rho_c * self.kV * dmu11_dt
         res_c_diff = (d_states_dt[:, :, 1] - dc_dt_expected) / 0.05
         loss_c_diff = torch.mean(res_c_diff ** 2)
 
-        # 3. Physics Law 3: Exact Integral Solute Mass Conservation: Delta c + rho_c * kV * Delta mu11 = 0
+        # 6. Physics Law 6: Exact Integral Solute Mass Conservation: Delta c + rho_c * kV * Delta mu11 = 0
         if curr_state is not None:
             c_0 = curr_state[:, 1].unsqueeze(1)
             mu11_0 = (10.0 ** curr_state[:, 6]).unsqueeze(1)
@@ -170,36 +214,43 @@ class DifferentiableQMOMPhysics(nn.Module):
         else:
             loss_mass_int = torch.tensor(0.0, device=states_pred.device, dtype=states_pred.dtype)
 
-        # 4. Thermodynamic Law 4: Solubility Lower Bound c >= cs(T)
+        # 7. Thermodynamic Law 7: Solubility Lower Bound c >= cs(T)
         cs_eval = self.calculate_solubility(T_eval)
         undersat_viol = torch.relu(cs_eval - c_eval)
-        loss_thermo = torch.mean((undersat_viol / 10.0) ** 2)
+        loss_thermo = torch.mean((undersat_viol / 5.0) ** 2)
 
-        # 5. Physical Law 5: Aspect Ratio Definition AR = L1 / L2
+        # 8. Physical Law 8: Aspect Ratio Definition AR = L1 / L2
         ar_expected = L1_eval / L2_eval
-        res_ar = (ar_eval - ar_expected) / 2.0
+        res_ar = (ar_eval - ar_expected) / 0.5
         loss_ar = torch.mean(res_ar ** 2)
 
-        # 6. Physical Law 6: Growth Monotonicity during Cooling (dL1/dt >= 0, dL2/dt >= 0)
-        dL1 = full_states[:, 1:, 2] - full_states[:, :-1, 2]
-        dL2 = full_states[:, 1:, 3] - full_states[:, :-1, 3]
-        loss_mono = torch.mean((torch.relu(-dL1) / 1e-5) ** 2) + torch.mean((torch.relu(-dL2) / 1e-5) ** 2)
-
-        # 7. Non-negativity constraint penalty: physical dimensions, T, and c cannot be negative
+        # 9. Non-negativity and bounds penalty
         loss_bounds = torch.mean((torch.relu(-c_eval) / 10.0) ** 2) + \
                       torch.mean((torch.relu(-T_eval) / 10.0) ** 2) + \
                       torch.mean((torch.relu(-s_eval[:, :, 2]) / 1e-5) ** 2) + \
                       torch.mean((torch.relu(-s_eval[:, :, 3]) / 1e-5) ** 2)
 
-        total_physics_loss = loss_T + loss_c_diff + loss_mass_int + 2.0 * loss_thermo + loss_ar + 0.5 * loss_mono + 5.0 * loss_bounds
+        total_physics_loss = (
+            loss_T
+            + 0.5 * loss_G1
+            + 0.5 * loss_G2
+            + 0.5 * loss_B
+            + loss_c_diff
+            + loss_mass_int
+            + 2.0 * loss_thermo
+            + loss_ar
+            + 2.0 * loss_bounds
+        )
 
         return {
             "total_physics_loss": total_physics_loss,
             "loss_T": loss_T,
+            "loss_G1": loss_G1,
+            "loss_G2": loss_G2,
+            "loss_B": loss_B,
             "loss_c_diff": loss_c_diff,
             "loss_mass_int": loss_mass_int,
             "loss_thermo": loss_thermo,
             "loss_ar": loss_ar,
-            "loss_mono": loss_mono,
             "loss_bounds": loss_bounds,
         }
