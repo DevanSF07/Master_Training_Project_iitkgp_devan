@@ -15,3 +15,8 @@ ENV/
 .DS_Store
 *.swp
 *.html
+
+# Archive & Large Raw Extraction Dumps
+archive/
+*.tif
+extracted_paper_figs/*.tif

@@ -82,52 +82,107 @@ $$\langle L_1 \rangle_0 = 107.5\,\mu\text{m}, \quad \langle L_2 \rangle_0 = 60.3
 
 ---
 
-## 4. Repository Structure
+## 4. The 11 Differential-Algebraic Equations (QMOM)
+
+The exact 11 ODE system formulation matching Szilágyi & Lakatos (2015) is documented in [`THE_11_ODE_EQUATIONS_QMOM.md`](file:///Users/devansinghfaujdar/Documents/Master_Training_Project_iitkgp/THE_11_ODE_EQUATIONS_QMOM.md):
+- **ODEs 1–3**: Length growth for 3 nodes: $dL_{1,i}/dt = G_1(\sigma, L_{1,i})$
+- **ODEs 4–6**: Width growth for 3 nodes: $dL_{2,i}/dt = G_2(\sigma, L_{2,i})$
+- **ODEs 7–9**: Dynamic weights linear system: $\mathbf{M} \mathbf{\dot{w}} = [B, 0, 0]^T$
+- **ODE 10**: Solute mass balance: $dc/dt = -\rho_c R_V$
+- **ODE 11**: Temperature cooling schedule: $dT/dt = -cr$
+
+---
+
+## 5. Clean Repository Layout
 
 ```
-├── Szilagyi_Lakatos_2015_Crystallization_Paper.pdf  # Original research paper
-├── config.py                                        # Process constants, Table 1 & Table 2
-├── crystallizer_mom.py                              # First-principles 2D QMOM ODE simulator
-├── reproduce_paper_results.py                       # Runs simulation to reproduce Figures 1-11
-├── plots/
-│   └── paper_reproduction/                          # High-resolution benchmark figures
-│       ├── fig1_concentration_solubility.png
-│       ├── fig3_mean_crystal_sizes.png
-│       ├── fig6_cooling_stirring_effects.png
-│       ├── fig8_product_sizes_vs_Ts.png
-│       ├── fig9_aspect_ratio_vs_Ts.png
-│       ├── fig10_nucleation_rate_evolution.png
-│       └── fig11_3d_phase_trajectory.png
-└── README.md
+├── THE_11_ODE_EQUATIONS_QMOM.md             # Complete mathematical documentation of the 11 ODEs
+├── simulate_all_cases_matlab.m              # Master MATLAB script solving 11 ODEs via ode15s (BDF)
+├── generate_simulation_data.py              # Python runner solving identical 11 ODEs via SciPy BDF
+├── reproduce_paper_results.py               # Visualizer loading CSV data to generate Figs 1, 3-11
+├── config.py                                # Process constants, Table 1 & Table 2
+├── crystallizer_qmom.py                     # Core 11-state QMOM engine
+├── matlab_simulation_data/                  # Stored simulation datasets (CSV)
+│   ├── fig1_data.csv
+│   ├── fig3_data.csv
+│   ├── fig4_fig5_data.csv
+│   ├── fig6_fig7_data.csv
+│   ├── fig8_fig9_data.csv
+│   ├── fig10_data.csv
+│   └── fig11_data.csv
+├── plots/paper_reproduction/                # 10 publication figures
+├── Batch_Cooling_Crystallization_QMOM_Report.pdf  # Comprehensive academic textbook-style report
+├── Szilagyi_Lakatos_2015_Crystallization_Paper.pdf # Original benchmark research paper
+└── archive/                                 # Archived non-essential scratch files
 ```
 
 ---
 
-## 5. How to Run the Reproduction
+## 6. Execution Instructions
 
-### Step 1: Install Dependencies
-```bash
-pip install numpy scipy matplotlib
+### A. Run in MATLAB (Recommended)
+Open MATLAB and execute:
+```matlab
+simulate_all_cases_matlab
 ```
+This runs the full 11-state ODE solver using MATLAB `ode15s` and exports all datasets to `matlab_simulation_data/`.
 
-### Step 2: Test the First-Principles MOM Simulator
+### B. Run Dual Python Simulation Suite
 ```bash
-python3 crystallizer_mom.py
-```
-*Expected Output:*
-```text
-Testing First-Principles Method of Moments Batch Crystallizer...
-Simulation completed successfully!
-Time span: 0 to 12005 s
-Initial Concentration: 240.00 kg/m^3 -> Final: 68.26 kg/m^3
-Initial <L1>: 107.5 um -> Final: 479.3 um
-Initial <L2>: 60.3 um -> Final: 213.1 um
-Initial Aspect Ratio: 1.78 -> Final: 2.25
-Final mu11: 22000.26 m^2/m^3
+.venv/bin/python3 generate_simulation_data.py
 ```
 
-### Step 3: Generate All Published Figures
+### C. Generate Reproduction Figures
 ```bash
-python3 reproduce_paper_results.py
+.venv/bin/python3 reproduce_paper_results.py
 ```
-This runs the full parametric matrix across cooling rates, stirring powers, and seeding temperatures, generating the exact benchmark plots matching the paper in `plots/paper_reproduction/`.
+This strictly loads the pre-computed CSV datasets from `matlab_simulation_data/` and generates all 10 figures in `plots/paper_reproduction/`.
+
+---
+
+## 7. Physics-Informed Recurrent Neural Networks (PIRNN) Module
+
+The `PIRNN/` package implements a complete deep learning and physics-informed control suite:
+
+```
+├── PIRNN/
+│   ├── temperature_profiles.py          # 6 analytical & piecewise cooling profiles
+│   ├── plant_simulator.py               # Stiff 11-ODE QMOM plant solver + sensor noise
+│   ├── data_generator.py                # 60-batch synthetic dataset generator (11,833 steps)
+│   ├── dataset.py                       # PyTorch rolling-window DataLoader utilities
+│   ├── models.py                        # CrystallizerRecurrentModel (Encoder-Decoder GRU)
+│   ├── qmom_physics.py                  # Differentiable PyTorch QMOM physics operator
+│   ├── train_baseline_rnn.py            # Stage 2: Pure empirical GRU baseline
+│   ├── train_forward_pirnn.py           # Stage 3: Forward PIRNN with 7 physical loss terms
+│   ├── evaluate_baseline.py             # Baseline rolling forecast & open-loop rollout
+│   ├── compare_models.py                # Direct head-to-head benchmarking engine
+│   ├── generate_pdf_report.py           # ReportLab publication PDF report compiler
+│   ├── checkpoints/                     # Model weights (.pt) and loss curves
+│   ├── plots/                           # High-res comparative evaluation figures
+│   └── PIRNN_Comprehensive_Research_Report.pdf # 11-page publication research report
+```
+
+### Running the PIRNN Workflow
+
+1. **Synthesize the 60-Batch Crystallization Dataset:**
+   ```bash
+   PYTHONPATH=. .venv/bin/python3 PIRNN/generate_data.py
+   ```
+2. **Train Pure Baseline GRU (Stage 2):**
+   ```bash
+   PYTHONPATH=. .venv/bin/python3 PIRNN/train_baseline_rnn.py --epochs 60
+   ```
+3. **Train Forward PIRNN (Stage 3):**
+   ```bash
+   PYTHONPATH=. .venv/bin/python3 PIRNN/train_forward_pirnn.py --epochs 60 --gamma_phys 0.05
+   ```
+4. **Run Head-to-Head Comparative Benchmark:**
+   ```bash
+   PYTHONPATH=. .venv/bin/python3 PIRNN/compare_models.py
+   ```
+5. **Compile Comprehensive 11-Page PDF Technical Report:**
+   ```bash
+   PYTHONPATH=. .venv/bin/python3 PIRNN/generate_pdf_report.py
+   ```
+
+

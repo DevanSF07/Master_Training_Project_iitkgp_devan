@@ -1,17 +1,22 @@
 """
 Paper Results Reproduction: Batch Cooling Crystallization of Plate-like Crystals.
+Decoupled Simulation & Visualization Pipeline.
 
-Reproduces the key simulation findings from:
-    Botond Szilagyi and Bela G. Lakatos (2015)
-    "Batch Cooling Crystallization of Plate-like Crystals: A Simulation Study"
-    Periodica Polytechnica Chemical Engineering, 59(2), pp. 151-158.
+Loads pre-computed, exact 10-state QMOM simulation datasets directly from:
+  matlab_simulation_data/
+and generates all 10 reproduction figures in:
+  plots/paper_reproduction/
 
 Figures Generated:
-- Fig. 1: Solute concentration and solubility vs temperature in batch crystallization.
-- Fig. 3: Time evolution of mean crystal sizes <L1> and <L2> for various stirring powers.
-- Fig. 6: Final mean crystal sizes vs stirring power for different cooling rates.
-- Fig. 8 & 9: Final crystal sizes and aspect ratio vs cooling rate for different seeding temperatures.
-- Fig. 10: Dynamic evolution of secondary nucleation rate B(t) across seeding temperatures.
+- Fig. 1: Solute concentration and solubility vs temperature (with pre-cooling & seeding).
+- Fig. 3: Time evolution of mean crystal sizes <L1> and <L2> for stirring powers [250, 350, 450, 550] W/kg.
+- Fig. 4: Final mean crystal sizes <L1> and <L2> vs seed quantity (1-4%) across 4 seed sizes.
+- Fig. 5: Final mean aspect ratio <L1>/<L2> vs seed quantity (1-4%) across 4 seed sizes.
+- Fig. 6: Final mean crystal sizes vs stirring power (200-500 W/kg) for 4 cooling rates.
+- Fig. 7: Final mean aspect ratio vs stirring power (200-500 W/kg) for 4 cooling rates.
+- Fig. 8: Final crystal sizes vs cooling rate (1-8 x 10^-3 °C/s) for 4 seeding temperatures.
+- Fig. 9: Final aspect ratio vs cooling rate (1-8 x 10^-3 °C/s) for 4 seeding temperatures.
+- Fig. 10: Dynamic evolution of secondary nucleation rate B(t) across seeding temperatures (Log-Log).
 - Fig. 11: 3D Phase space trajectory in (mu11, S, RV) subspace.
 
 Author: Devan Singh Faujdar
@@ -19,19 +24,18 @@ Master Training Project, IIT Kharagpur
 """
 
 import os
+import csv
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
-import config
-from crystallizer_mom import BatchCrystallizerMOM, calculate_solubility
-
-# Ensure output directory exists
+DATA_DIR = "matlab_simulation_data"
 OUTPUT_DIR = "plots/paper_reproduction"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Styling configuration for publication-quality figures
+# Publication formatting matching Periodica Polytechnica Chemical Engineering style
 plt.rcParams.update({
+    "font.family": "sans-serif",
     "font.size": 11,
     "axes.labelsize": 12,
     "axes.titlesize": 13,
@@ -39,53 +43,60 @@ plt.rcParams.update({
     "ytick.labelsize": 10,
     "legend.fontsize": 10,
     "figure.titlesize": 14,
-    "lines.linewidth": 2,
+    "lines.linewidth": 2.0,
+    "lines.markersize": 6.0,
     "grid.alpha": 0.4,
 })
 
+# Paper color palette
+COLOR_BLUE   = "#1e3a8a"    # eps=250, Ts=29, seed=(50,30), cr=0.83
+COLOR_RED    = "#dc2626"    # eps=350, Ts=31, seed=(100,60), cr=1.67
+COLOR_GREEN  = "#16a34a"    # eps=450, Ts=33, seed=(150,90), cr=2.78
+COLOR_PURPLE = "#9333ea"    # eps=550, Ts=35, seed=(200,120), cr=8.33
 
-def generate_figure_1(simulator: BatchCrystallizerMOM):
+
+def load_csv_data(filename: str) -> dict:
+    """Load simulation data CSV into a dictionary of 1D numpy arrays."""
+    filepath = os.path.join(DATA_DIR, filename)
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(
+            f"Simulation dataset not found at '{filepath}'. "
+            "Please run 'simulate_all_cases_matlab.m' in MATLAB or 'generate_simulation_data.py' first."
+        )
+    with open(filepath, "r") as f:
+        reader = csv.reader(f)
+        headers = [h.strip() for h in next(reader)]
+        data = {h: [] for h in headers}
+        for row in reader:
+            if not row:
+                continue
+            for h, v in zip(headers, row):
+                data[h].append(float(v))
+    return {h: np.array(v) for h, v in data.items()}
+
+
+def generate_figure_1():
     """Fig. 1: Solute concentration and solubility vs temperature."""
     print("Generating Figure 1: Solute concentration and solubility vs temperature...")
-    
-    # 1. Full equilibrium solubility line from 25.0 to 35.2 °C
-    T_sol = np.linspace(25.0, 35.2, 200)
-    cs_sol = np.array([calculate_solubility(t) for t in T_sol])
+    data = load_csv_data("fig1_data.csv")
 
-    # 2. Main cooling trajectory from seeding temp (Ts = 34.0 °C) down to 25.0 °C
-    res = simulator.simulate(T_seed=34.0, T_final=25.0, cooling_rate=config.COOLING_RATE_NOMINAL, num_points=120)
-
-    # 3. Construct exact actual concentration path:
-    #    a) Pre-cooling from Th = 35.2 °C to Ts = 34.0 °C at constant c = 240.0 kg/m^3
-    #    b) Vertical desaturation drop upon seeding at 34.0 °C down to near solubility line
-    #    c) Dynamic cooling trajectory from 34.0 °C to 25.0 °C
-    cs_at_seeding = float(calculate_solubility(34.0))
-    T_actual = np.concatenate([
-        [35.2, 34.0],              # Pre-cooling at constant concentration
-        [34.0],                    # Rapid desaturation drop at seeding
-        res["temperature"]         # Cooling desaturation path down to 25.0 °C
-    ])
-    c_actual = np.concatenate([
-        [240.0, 240.0],            # Pre-cooling
-        [cs_at_seeding],           # Drops to solubility at seeding
-        res["concentration"]       # Trajectory
-    ])
+    T = data["Temperature_C"]
+    c = data["Concentration_kg_m3"]
+    cs = data["Solubility_kg_m3"]
 
     plt.figure(figsize=(7, 5))
-    # Blue solid actual concentration trajectory
-    plt.plot(T_actual, c_actual, color="#1e3a8a", linewidth=2.2, label="Actual concentration")
-    # Red dashed solubility curve
-    plt.plot(T_sol, cs_sol, color="#dc2626", linestyle="--", linewidth=2.0, label="Solubility line")
-    # Green circle at concentrated hot solution (35.2 °C, 240 kg/m^3)
-    plt.plot([35.2], [240.0], color="#16a34a", marker="o", markersize=6.5, linestyle="None", label="Concentrated solution")
-    # Purple star at seeding point (34.0 °C, 240 kg/m^3)
-    plt.plot([34.0], [240.0], color="#9333ea", marker="*", markersize=11.0, linestyle="None", label="Seeding")
+    plt.plot(T, c, color=COLOR_BLUE, linewidth=2.4, label="Actual concentration")
+    plt.plot(T, cs, color=COLOR_RED, linestyle="--", linewidth=2.0, label="Solubility line")
+    plt.plot([35.2], [240.0], color=COLOR_GREEN, marker="o", markersize=7.0, linestyle="None", label="Concentrated solution")
+    plt.plot([34.0], [240.0], color=COLOR_PURPLE, marker="*", markersize=11.0, linestyle="None", label="Seeding")
 
     plt.xlabel("Temperature [°C]", fontsize=12)
     plt.ylabel("Concentration [kg/m³]", fontsize=12)
     plt.title("Fig. 1: Solute Concentration and Solubility vs Temperature", fontsize=13)
-    plt.xlim(25.0, 35.5)
+    plt.xlim(24.5, 35.5)
+    plt.xticks([25, 27, 29, 31, 33, 35])
     plt.ylim(60, 255)
+    plt.yticks([70, 100, 150, 200, 240, 250])
     plt.grid(True, linestyle=":", alpha=0.6)
     plt.legend(loc="upper left", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
     plt.tight_layout()
@@ -93,40 +104,39 @@ def generate_figure_1(simulator: BatchCrystallizerMOM):
     plt.close()
 
 
-def generate_figure_3(simulator: BatchCrystallizerMOM):
-    """Fig. 3: Time evolution of mean crystal sizes for different stirring powers."""
+def generate_figure_3():
+    """Fig. 3: Time evolution of mean crystal sizes <L1> and <L2>."""
     print("Generating Figure 3: Time evolution of mean crystal sizes...")
-    stirring_powers = [250, 350, 450, 550]
-    
-    # Exact styling from Figure 3 of the paper:
+    data = load_csv_data("fig3_data.csv")
+
+    t = data["Time_s"]
+    powers = [250, 350, 450, 550]
     styles = [
-        {"color": "#1e3a8a", "linestyle": "-",  "marker": "o", "label": "ε = 250 W/kg"},
-        {"color": "#b91c1c", "linestyle": ":",  "marker": "o", "label": "ε = 350 W/kg"},
-        {"color": "#15803d", "linestyle": "-.", "marker": "o", "label": "ε = 450 W/kg"},
-        {"color": "#7e22ce", "linestyle": "--", "marker": "s", "label": "ε = 550 W/kg"},
+        {"color": COLOR_BLUE,   "linestyle": "-",  "marker": "o", "label": "ε = 250 W/kg"},
+        {"color": COLOR_RED,    "linestyle": "--", "marker": "s", "label": "ε = 350 W/kg"},
+        {"color": COLOR_GREEN,  "linestyle": ":",  "marker": "^", "label": "ε = 450 W/kg"},
+        {"color": COLOR_PURPLE, "linestyle": "-.", "marker": "d", "label": "ε = 550 W/kg"},
     ]
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(7.5, 9.5), sharex=True)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+    mark_step = max(1, len(t) // 10)
 
-    for idx, eps in enumerate(stirring_powers):
-        res = simulator.simulate(epsilon=float(eps), num_points=120)
-        t = res["time"]
-        L1_scaled = res["mean_L1"] * 1.0e4  # in units of 10^-4 m
-        L2_scaled = res["mean_L2"] * 1.0e4
+    for p_val, st in zip(powers, styles):
+        L1_scaled = data[f"L1_eps{p_val}_m"] * 1.0e4  # in 10^-4 m
+        L2_scaled = data[f"L2_eps{p_val}_m"] * 1.0e4
 
-        st = styles[idx]
-        mark_step = max(1, len(t) // 10)
         ax1.plot(t, L1_scaled, color=st["color"], linestyle=st["linestyle"],
-                 marker=st["marker"], markevery=mark_step, markersize=6, label=st["label"], linewidth=2.0)
+                 marker=st["marker"], markevery=mark_step, label=st["label"])
         ax2.plot(t, L2_scaled, color=st["color"], linestyle=st["linestyle"],
-                 marker=st["marker"], markevery=mark_step, markersize=6, label=st["label"], linewidth=2.0)
+                 marker=st["marker"], markevery=mark_step, label=st["label"])
 
     # Subplot (a) - Mean Length
+    ax1.set_xlabel("Time [s]", fontsize=12)
     ax1.set_ylabel("⟨L₁⟩ [m]", fontsize=12)
     ax1.text(0.0, 1.02, r"$\times 10^{-4}$", transform=ax1.transAxes, fontsize=11)
-    ax1.set_title("a)", fontsize=13, y=-0.22)
+    ax1.set_title("a) Mean Length ⟨L₁⟩", fontsize=13)
     ax1.set_xlim(0, 12000)
-    ax1.set_ylim(1.0, 5.0)
+    ax1.set_xticks([0, 2000, 4000, 6000, 8000, 10000, 12000])
     ax1.grid(True, linestyle=":", alpha=0.6)
     ax1.legend(loc="lower right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
 
@@ -134,210 +144,321 @@ def generate_figure_3(simulator: BatchCrystallizerMOM):
     ax2.set_xlabel("Time [s]", fontsize=12)
     ax2.set_ylabel("⟨L₂⟩ [m]", fontsize=12)
     ax2.text(0.0, 1.02, r"$\times 10^{-4}$", transform=ax2.transAxes, fontsize=11)
-    ax2.set_title("b)", fontsize=13, y=-0.26)
+    ax2.set_title("b) Mean Width ⟨L₂⟩", fontsize=13)
     ax2.set_xlim(0, 12000)
-    ax2.set_ylim(0.5, 2.5)
+    ax2.set_xticks([0, 2000, 4000, 6000, 8000, 10000, 12000])
     ax2.grid(True, linestyle=":", alpha=0.6)
     ax2.legend(loc="lower right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
 
+    fig.suptitle("Fig. 3: Time Evolution of Characteristic Mean Crystal Sizes (From Stored QMOM Data)", fontsize=14)
     plt.tight_layout()
     plt.savefig(os.path.join(OUTPUT_DIR, "fig3_mean_crystal_sizes.png"), dpi=300)
     plt.close()
 
 
-def generate_figure_6(simulator: BatchCrystallizerMOM):
-    """Fig. 6: Effects of stirring power and cooling rate on final product properties."""
-    print("Generating Figure 6: Effects of stirring power and cooling rate...")
-    cooling_rates = [0.83e-3, 1.67e-3, 2.78e-3, 8.33e-3]
-    cr_labels = ["0.83 × 10⁻³ °C/s", "1.67 × 10⁻³ °C/s", "2.78 × 10⁻³ °C/s", "8.33 × 10⁻³ °C/s"]
-    eps_values = np.linspace(200, 500, 7)
-    colors = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd"]
-    markers = ["o", "s", "^", "d"]
+def generate_figures_4_and_5():
+    """Figs. 4 & 5: Seed properties (size and mass percentage) on product properties."""
+    print("Generating Figures 4 & 5: Seed quantity and size effects...")
+    data = load_csv_data("fig4_fig5_data.csv")
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
-    fig_ar, ax_ar = plt.subplots(figsize=(8, 5.5))
+    q = data["SeedQuantity_pct"]
+    configs = [
+        {"name": "Seed: (50,30)",   "key": "Seed_50_30",   "color": COLOR_BLUE,   "ls": "-",  "m": "o"},
+        {"name": "Seed: (100,60)",  "key": "Seed_100_60",  "color": COLOR_RED,    "ls": "--", "m": "s"},
+        {"name": "Seed: (150,90)",  "key": "Seed_150_90",  "color": COLOR_GREEN,  "ls": ":",  "m": "^"},
+        {"name": "Seed: (200,120)", "key": "Seed_200_120", "color": COLOR_PURPLE, "ls": "-.", "m": "d"},
+    ]
 
-    for cr_idx, cr in enumerate(cooling_rates):
-        final_L1 = []
-        final_L2 = []
-        final_AR = []
-        for eps in eps_values:
-            res = simulator.simulate(cooling_rate=cr, epsilon=eps, num_points=80)
-            l1_val = res["mean_L1"][-1] * 1.0e4
-            l2_val = res["mean_L2"][-1] * 1.0e4
-            final_L1.append(l1_val)
-            final_L2.append(l2_val)
-            final_AR.append(l1_val / l2_val)
+    fig4, (ax4a, ax4b) = plt.subplots(1, 2, figsize=(13, 5))
+    fig5, ax5 = plt.subplots(figsize=(7, 5))
 
-        ax1.plot(eps_values, final_L1, color=colors[cr_idx], marker=markers[cr_idx],
-                 label=f"cr = {cr_labels[cr_idx]}")
-        ax2.plot(eps_values, final_L2, color=colors[cr_idx], marker=markers[cr_idx],
-                 label=f"cr = {cr_labels[cr_idx]}")
-        ax_ar.plot(eps_values, final_AR, color=colors[cr_idx], marker=markers[cr_idx],
-                   label=f"cr = {cr_labels[cr_idx]}")
+    for cfg in configs:
+        k = cfg["key"]
+        l1 = data[f"L1_{k}_m"] * 1.0e4
+        l2 = data[f"L2_{k}_m"] * 1.0e4
+        ar = data[f"AR_{k}"]
 
-    ax1.set_xlabel("ε [W/kg]")
-    ax1.set_ylabel("⟨L₁⟩ [m] × 10⁻⁴")
-    ax1.set_title("Fig. 6(b): Final Mean Length vs Stirring Energy")
-    ax1.set_ylim(3.5, 5.3)
-    ax1.grid(True, linestyle="--")
-    ax1.legend(loc="upper right", frameon=True)
+        ax4a.plot(q, l1, color=cfg["color"], linestyle=cfg["ls"], marker=cfg["m"], label=cfg["name"])
+        ax4b.plot(q, l2, color=cfg["color"], linestyle=cfg["ls"], marker=cfg["m"], label=cfg["name"])
+        ax5.plot(q, ar, color=cfg["color"], linestyle=cfg["ls"], marker=cfg["m"], label=cfg["name"])
 
-    ax2.set_xlabel("ε [W/kg]")
-    ax2.set_ylabel("⟨L₂⟩ [m] × 10⁻⁴")
-    ax2.set_title("Fig. 6(a): Final Mean Width vs Stirring Energy")
-    ax2.set_ylim(1.3, 2.7)
-    ax2.grid(True, linestyle="--")
-    ax2.legend(loc="upper right", frameon=True)
+    # Figure 4(a) - Final Length
+    ax4a.set_xlabel("Seed quantity [% of solute]", fontsize=12)
+    ax4a.set_ylabel("⟨L₁⟩ [m]", fontsize=12)
+    ax4a.text(0.0, 1.02, r"$\times 10^{-4}$", transform=ax4a.transAxes, fontsize=11)
+    ax4a.set_title("a) Final Length ⟨L₁⟩", fontsize=13)
+    ax4a.set_xlim(0.8, 4.2)
+    ax4a.set_xticks([1, 1.5, 2, 2.5, 3, 3.5, 4])
+    ax4a.grid(True, linestyle=":", alpha=0.6)
+    ax4a.legend(loc="upper right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
 
-    fig.tight_layout()
-    fig.savefig(os.path.join(OUTPUT_DIR, "fig6_cooling_stirring_effects.png"), dpi=300)
-    plt.close(fig)
+    # Figure 4(b) - Final Width
+    ax4b.set_xlabel("Seed quantity [% of solute]", fontsize=12)
+    ax4b.set_ylabel("⟨L₂⟩ [m]", fontsize=12)
+    ax4b.text(0.0, 1.02, r"$\times 10^{-4}$", transform=ax4b.transAxes, fontsize=11)
+    ax4b.set_title("b) Final Width ⟨L₂⟩", fontsize=13)
+    ax4b.set_xlim(0.8, 4.2)
+    ax4b.set_xticks([1, 1.5, 2, 2.5, 3, 3.5, 4])
+    ax4b.grid(True, linestyle=":", alpha=0.6)
+    ax4b.legend(loc="upper right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
 
-    ax_ar.set_xlabel("ε [W/kg]")
-    ax_ar.set_ylabel("⟨L₁⟩ / ⟨L₂⟩ [-]")
-    ax_ar.set_title("Fig. 7: Final Aspect Ratio vs Stirring Power")
-    ax_ar.set_ylim(1.4, 2.6)
-    ax_ar.grid(True, linestyle="--")
-    ax_ar.legend(loc="upper right", frameon=True)
-    fig_ar.tight_layout()
-    fig_ar.savefig(os.path.join(OUTPUT_DIR, "fig7_aspect_ratio_cooling_stirring.png"), dpi=300)
-    plt.close(fig_ar)
+    fig4.suptitle("Fig. 4: Variation of the Mean Crystal Sizes with Seed Properties (Stored Data)", fontsize=14)
+    fig4.tight_layout()
+    fig4.savefig(os.path.join(OUTPUT_DIR, "fig4_seed_properties_sizes.png"), dpi=300)
+    plt.close(fig4)
 
-
-def generate_figures_8_and_9(simulator: BatchCrystallizerMOM):
-    """Fig. 8 & 9: Effects of cooling rate and seeding temperature."""
-    print("Generating Figures 8 & 9: Effects of seeding temperature and cooling rate...")
-    seeding_temps = [29.0, 31.0, 33.0, 35.0]
-    cr_values = np.linspace(1.0e-3, 8.33e-3, 8)
-    colors = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd"]
-    markers = ["o", "s", "^", "d"]
-
-    fig_sizes, (ax_l1, ax_l2) = plt.subplots(1, 2, figsize=(14, 5.5))
-    fig_ar, ax_ar = plt.subplots(figsize=(8, 5.5))
-
-    for idx, Ts in enumerate(seeding_temps):
-        l1_list = []
-        l2_list = []
-        ar_list = []
-        for cr in cr_values:
-            res = simulator.simulate(T_seed=Ts, T_final=25.0, cooling_rate=cr, num_points=80)
-            l1_final = res["mean_L1"][-1] * 1.0e4
-            l2_final = res["mean_L2"][-1] * 1.0e4
-            ar_final = l1_final / l2_final
-
-            l1_list.append(l1_final)
-            l2_list.append(l2_final)
-            ar_list.append(ar_final)
-
-        cr_display = cr_values * 1.0e3
-        ax_l1.plot(cr_display, l1_list, color=colors[idx], marker=markers[idx],
-                   label=f"Ts = {int(Ts)} °C")
-        ax_l2.plot(cr_display, l2_list, color=colors[idx], marker=markers[idx],
-                   label=f"Ts = {int(Ts)} °C")
-        ax_ar.plot(cr_display, ar_list, color=colors[idx], marker=markers[idx],
-                   label=f"Ts = {int(Ts)} °C")
-
-    ax_l1.set_xlabel("cr [× 10⁻³ °C/s]")
-    ax_l1.set_ylabel("⟨L₁⟩ [m] × 10⁻⁴")
-    ax_l1.set_title("Fig. 8(a): Final Length vs Cooling Rate")
-    ax_l1.set_ylim(3.4, 5.2)
-    ax_l1.grid(True, linestyle="--")
-    ax_l1.legend(loc="lower left", frameon=True)
-
-    ax_l2.set_xlabel("cr [× 10⁻³ °C/s]")
-    ax_l2.set_ylabel("⟨L₂⟩ [m] × 10⁻⁴")
-    ax_l2.set_title("Fig. 8(b): Final Width vs Cooling Rate")
-    ax_l2.set_ylim(0.8, 2.6)
-    ax_l2.grid(True, linestyle="--")
-    ax_l2.legend(loc="lower left", frameon=True)
-
-    fig_sizes.tight_layout()
-    fig_sizes.savefig(os.path.join(OUTPUT_DIR, "fig8_product_sizes_vs_Ts.png"), dpi=300)
-    plt.close(fig_sizes)
-
-    ax_ar.set_xlabel("cr [× 10⁻³ °C/s]")
-    ax_ar.set_ylabel("⟨L₁⟩ / ⟨L₂⟩ [-]")
-    ax_ar.set_title("Fig. 9: Final Aspect Ratio vs Cooling Rate")
-    ax_ar.set_ylim(1.8, 4.2)
-    ax_ar.grid(True, linestyle="--")
-    ax_ar.legend(loc="upper right", frameon=True)
-    fig_ar.tight_layout()
-    fig_ar.savefig(os.path.join(OUTPUT_DIR, "fig9_aspect_ratio_vs_Ts.png"), dpi=300)
-    plt.close(fig_ar)
+    # Figure 5 - Aspect Ratio
+    ax5.set_xlabel("Seed quantity [% of solute]", fontsize=12)
+    ax5.set_ylabel(r"⟨L₁⟩/⟨L₂⟩", fontsize=12)
+    ax5.set_title("Fig. 5: Variation of Mean Aspect Ratio with Seed Properties", fontsize=13)
+    ax5.set_xlim(0.8, 4.2)
+    ax5.set_xticks([1, 1.5, 2, 2.5, 3, 3.5, 4])
+    ax5.grid(True, linestyle=":", alpha=0.6)
+    ax5.legend(loc="upper right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
+    fig5.tight_layout()
+    fig5.savefig(os.path.join(OUTPUT_DIR, "fig5_aspect_ratio_seed_properties.png"), dpi=300)
+    plt.close(fig5)
 
 
-def generate_figure_10(simulator: BatchCrystallizerMOM):
-    """Fig. 10: Dynamic evolution of secondary nucleation rate across seeding temperatures."""
-    print("Generating Figure 10: Time evolution of nucleation rate...")
-    seeding_temps = [29.0, 31.0, 33.0, 35.0]
-    colors = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd"]
+def generate_figures_6_and_7():
+    """Figs. 6 & 7: Stirring power and cooling rate sensitivity."""
+    print("Generating Figures 6 & 7: Cooling rate and stirring power effects...")
+    data = load_csv_data("fig6_fig7_data.csv")
 
-    plt.figure(figsize=(8, 5.5))
+    eps = data["Epsilon_W_kg"]
+    configs = [
+        {"lbl": "083", "label": "cr = 0.83 · 10⁻³ °C/s", "color": COLOR_BLUE,   "ls": "-",  "m": "o"},
+        {"lbl": "167", "label": "cr = 1.67 · 10⁻³ °C/s", "color": COLOR_RED,    "ls": "--", "m": "s"},
+        {"lbl": "278", "label": "cr = 2.78 · 10⁻³ °C/s", "color": COLOR_GREEN,  "ls": ":",  "m": "^"},
+        {"lbl": "833", "label": "cr = 8.33 · 10⁻³ °C/s", "color": COLOR_PURPLE, "ls": "-.", "m": "d"},
+    ]
 
-    for idx, Ts in enumerate(seeding_temps):
-        res = simulator.simulate(T_seed=Ts, T_final=25.0, cooling_rate=config.COOLING_RATE_NOMINAL, num_points=250)
-        t = np.maximum(res["time"], 1.0e-4)
-        B = np.maximum(res["nucleation_rate"], 1.0e4)
+    fig6, (ax6a, ax6b) = plt.subplots(1, 2, figsize=(13, 5))
+    fig7, ax7 = plt.subplots(figsize=(7, 5))
 
-        plt.loglog(t, B, color=colors[idx], label=f"Ts = {int(Ts)} °C")
+    for cfg in configs:
+        lbl = cfg["lbl"]
+        l1 = data[f"L1_cr{lbl}_m"] * 1.0e4
+        l2 = data[f"L2_cr{lbl}_m"] * 1.0e4
+        ar = data[f"AR_cr{lbl}"]
 
-    plt.xlabel("Time [s]")
-    plt.ylabel("Nucleation rate [# m⁻³ s⁻¹]")
-    plt.title("Fig. 10: Time Evolution of Secondary Nucleation Rate")
-    plt.xlim(1.0e-4, 2.0e4)
-    plt.ylim(1.0e5, 1.0e12)
-    plt.grid(True, which="both", linestyle="--", alpha=0.5)
-    plt.legend(loc="upper right", frameon=True)
+        ax6a.plot(eps, l1, color=cfg["color"], linestyle=cfg["ls"], marker=cfg["m"], label=cfg["label"])
+        ax6b.plot(eps, l2, color=cfg["color"], linestyle=cfg["ls"], marker=cfg["m"], label=cfg["label"])
+        ax7.plot(eps, ar, color=cfg["color"], linestyle=cfg["ls"], marker=cfg["m"], label=cfg["label"])
+
+    # Figure 6(a) - Final Length
+    ax6a.set_xlabel("ε [W/kg]", fontsize=12)
+    ax6a.set_ylabel("⟨L₁⟩ [m]", fontsize=12)
+    ax6a.text(0.0, 1.02, r"$\times 10^{-4}$", transform=ax6a.transAxes, fontsize=11)
+    ax6a.set_title("a) Final Length ⟨L₁⟩", fontsize=13)
+    ax6a.set_xlim(180, 520)
+    ax6a.set_xticks([200, 250, 300, 350, 400, 450, 500])
+    ax6a.grid(True, linestyle=":", alpha=0.6)
+    ax6a.legend(loc="upper right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
+
+    # Figure 6(b) - Final Width
+    ax6b.set_xlabel("ε [W/kg]", fontsize=12)
+    ax6b.set_ylabel("⟨L₂⟩ [m]", fontsize=12)
+    ax6b.text(0.0, 1.02, r"$\times 10^{-4}$", transform=ax6b.transAxes, fontsize=11)
+    ax6b.set_title("b) Final Width ⟨L₂⟩", fontsize=13)
+    ax6b.set_xlim(180, 520)
+    ax6b.set_xticks([200, 250, 300, 350, 400, 450, 500])
+    ax6b.grid(True, linestyle=":", alpha=0.6)
+    ax6b.legend(loc="upper right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
+
+    fig6.suptitle("Fig. 6: Effects of Stirring Power and Cooling Rate on Product Sizes (Stored Data)", fontsize=14)
+    fig6.tight_layout()
+    fig6.savefig(os.path.join(OUTPUT_DIR, "fig6_cooling_stirring_effects.png"), dpi=300)
+    plt.close(fig6)
+
+    # Figure 7 - Aspect Ratio
+    ax7.set_xlabel("ε [W/kg]", fontsize=12)
+    ax7.set_ylabel(r"⟨L₁⟩/⟨L₂⟩", fontsize=12)
+    ax7.set_title("Fig. 7: Effects of Stirring Power and Cooling Rate on Aspect Ratio", fontsize=13)
+    ax7.set_xlim(180, 520)
+    ax7.set_xticks([200, 250, 300, 350, 400, 450, 500])
+    ax7.grid(True, linestyle=":", alpha=0.6)
+    ax7.legend(loc="upper right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
+    fig7.tight_layout()
+    fig7.savefig(os.path.join(OUTPUT_DIR, "fig7_aspect_ratio_cooling_stirring.png"), dpi=300)
+    plt.close(fig7)
+
+
+def generate_figures_8_and_9():
+    """Figs. 8 & 9: Effects of cooling rate and seeding temperature."""
+    print("Generating Figures 8 & 9: Seeding temperature and cooling rate effects...")
+    data = load_csv_data("fig8_fig9_data.csv")
+
+    cr = data["CoolingRate_1e3_C_s"]
+    configs = [
+        {"ts": 29, "label": "Ts = 29 °C", "color": COLOR_BLUE,   "ls": "-",  "m": "o"},
+        {"ts": 31, "label": "Ts = 31 °C", "color": COLOR_RED,    "ls": "--", "m": "s"},
+        {"ts": 33, "label": "Ts = 33 °C", "color": COLOR_GREEN,  "ls": ":",  "m": "^"},
+        {"ts": 35, "label": "Ts = 35 °C", "color": COLOR_PURPLE, "ls": "-.", "m": "d"},
+    ]
+
+    fig8, (ax8a, ax8b) = plt.subplots(1, 2, figsize=(13, 5))
+    fig9, ax9 = plt.subplots(figsize=(7, 5))
+
+    for cfg in configs:
+        ts = cfg["ts"]
+        l1 = data[f"L1_Ts{ts}_m"] * 1.0e4
+        l2 = data[f"L2_Ts{ts}_m"] * 1.0e4
+        ar = data[f"AR_Ts{ts}"]
+
+        ax8a.plot(cr, l1, color=cfg["color"], linestyle=cfg["ls"], marker=cfg["m"], label=cfg["label"])
+        ax8b.plot(cr, l2, color=cfg["color"], linestyle=cfg["ls"], marker=cfg["m"], label=cfg["label"])
+        ax9.plot(cr, ar, color=cfg["color"], linestyle=cfg["ls"], marker=cfg["m"], label=cfg["label"])
+
+    # Figure 8(a) - Final Length
+    ax8a.set_xlabel("cr [°C/s]", fontsize=12)
+    ax8a.text(1.0, -0.15, r"$\times 10^{-3}$", transform=ax8a.transAxes, fontsize=11, ha="right")
+    ax8a.set_ylabel("⟨L₁⟩ [m]", fontsize=12)
+    ax8a.text(0.0, 1.02, r"$\times 10^{-4}$", transform=ax8a.transAxes, fontsize=11)
+    ax8a.set_title("a) Final Length ⟨L₁⟩", fontsize=13)
+    ax8a.set_xlim(0.5, 8.8)
+    ax8a.set_xticks([1, 2, 3, 4, 5, 6, 7, 8])
+    ax8a.grid(True, linestyle=":", alpha=0.6)
+    ax8a.legend(loc="upper right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
+
+    # Figure 8(b) - Final Width
+    ax8b.set_xlabel("cr [°C/s]", fontsize=12)
+    ax8b.text(1.0, -0.15, r"$\times 10^{-3}$", transform=ax8b.transAxes, fontsize=11, ha="right")
+    ax8b.set_ylabel("⟨L₂⟩ [m]", fontsize=12)
+    ax8b.text(0.0, 1.02, r"$\times 10^{-4}$", transform=ax8b.transAxes, fontsize=11)
+    ax8b.set_title("b) Final Width ⟨L₂⟩", fontsize=13)
+    ax8b.set_xlim(0.5, 8.8)
+    ax8b.set_xticks([1, 2, 3, 4, 5, 6, 7, 8])
+    ax8b.grid(True, linestyle=":", alpha=0.6)
+    ax8b.legend(loc="upper right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
+
+    fig8.suptitle("Fig. 8: Effects of Cooling Rate and Seeding Temperature on Product Properties (Stored Data)", fontsize=14)
+    fig8.tight_layout()
+    fig8.savefig(os.path.join(OUTPUT_DIR, "fig8_product_sizes_vs_Ts.png"), dpi=300)
+    plt.close(fig8)
+
+    # Figure 9 - Aspect Ratio
+    ax9.set_xlabel("cr [°C/s]", fontsize=12)
+    ax9.text(1.0, -0.15, r"$\times 10^{-3}$", transform=ax9.transAxes, fontsize=11, ha="right")
+    ax9.set_ylabel(r"⟨L₁⟩/⟨L₂⟩", fontsize=12)
+    ax9.set_title("Fig. 9: Effects of Cooling Rate and Seeding Temperature on Aspect Ratio", fontsize=13)
+    ax9.set_xlim(0.5, 8.8)
+    ax9.set_xticks([1, 2, 3, 4, 5, 6, 7, 8])
+    ax9.grid(True, linestyle=":", alpha=0.6)
+    ax9.legend(loc="upper right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1")
+    fig9.tight_layout()
+    fig9.savefig(os.path.join(OUTPUT_DIR, "fig9_aspect_ratio_vs_Ts.png"), dpi=300)
+    plt.close(fig9)
+
+
+def generate_figure_10():
+    """Fig. 10: Dynamic evolution of secondary nucleation rate B(t) across seeding temperatures."""
+    print("Generating Figure 10: Time evolution of secondary nucleation rate (Log-Log)...")
+    data = load_csv_data("fig10_data.csv")
+
+    t = data["Time_s"]
+    configs = [
+        {"ts": 29, "label": "Ts = 29 °C", "color": COLOR_BLUE,   "ls": "-"},
+        {"ts": 31, "label": "Ts = 31 °C", "color": COLOR_RED,    "ls": "--"},
+        {"ts": 33, "label": "Ts = 33 °C", "color": COLOR_GREEN,  "ls": ":"},
+        {"ts": 35, "label": "Ts = 35 °C", "color": COLOR_PURPLE, "ls": "-."},
+    ]
+
+    plt.figure(figsize=(7.5, 6))
+
+    for cfg in configs:
+        ts = cfg["ts"]
+        B = np.maximum(data[f"B_Ts{ts}_m3_s"], 1.0e6)
+        plt.loglog(t, B, color=cfg["color"], linestyle=cfg["ls"], linewidth=2.0, label=cfg["label"])
+
+    plt.xlabel("Time [s]", fontsize=12)
+    plt.ylabel("Nucleation rate [# m⁻³s⁻¹]", fontsize=12)
+    plt.title("Fig. 10: Time Evolution of Nucleation Rate with Different Seeding Temperatures", fontsize=13)
+    plt.xlim(1.0e-4, 1.2e4)
+    plt.ylim(1.0e6, 1.0e12)
+    plt.grid(True, which="both", linestyle=":", alpha=0.6)
+    plt.legend(loc="upper right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1", fontsize=11)
     plt.tight_layout()
     plt.savefig(os.path.join(OUTPUT_DIR, "fig10_nucleation_rate_evolution.png"), dpi=300)
     plt.close()
 
 
-def generate_figure_11(simulator: BatchCrystallizerMOM):
-    """Fig. 11: 3D phase space projection in (mu11, S, RV) subspace."""
+def generate_figure_11():
+    """Fig. 11: 3D Phase space trajectory in (mu11, S, RV) subspace."""
     print("Generating Figure 11: 3D Phase space trajectory...")
-    seeding_temps = [29.0, 31.0, 33.0, 35.0]
-    colors = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd"]
+    data = load_csv_data("fig11_data.csv")
 
-    fig = plt.figure(figsize=(10, 7))
+    fig = plt.figure(figsize=(7.8, 6.8))
     ax = fig.add_subplot(111, projection="3d")
 
-    for idx, Ts in enumerate(seeding_temps):
-        res = simulator.simulate(T_seed=Ts, T_final=25.0, cooling_rate=config.COOLING_RATE_NOMINAL, num_points=200)
-        S = res["supersaturation_ratio"]
-        RV_scaled = res["volumetric_growth_rate"] * config.V_CRYSTALLIZER  # In crystallizer volume scale [m^3/s]
-        mu11_scaled = res["mu11"] * 1.0e-4  # In 10^4 m^2/m^3
+    configs = [
+        {"ts": 29, "label": "Ts = 29 °C", "color": COLOR_BLUE,   "ls": "-"},
+        {"ts": 31, "label": "Ts = 31 °C", "color": COLOR_RED,    "ls": "--"},
+        {"ts": 33, "label": "Ts = 33 °C", "color": COLOR_GREEN,  "ls": ":"},
+        {"ts": 35, "label": "Ts = 35 °C", "color": COLOR_PURPLE, "ls": "-."},
+    ]
 
-        ax.plot(S, RV_scaled, mu11_scaled, color=colors[idx], label=f"Ts = {int(Ts)} °C", linewidth=2)
+    for cfg in configs:
+        ts = cfg["ts"]
+        S = data[f"S_Ts{ts}"]
+        # RV display scaling in 10^-5 m^3/s
+        RV_scaled = data[f"RV_Ts{ts}"] / 1.0e-5
+        mu11_scaled = data[f"mu11_Ts{ts}"] / 1.0e4
 
-    ax.set_xlabel("Supersaturation Ratio S [-]", labelpad=10)
-    ax.set_ylabel("Growth Rate RV [m³/s]", labelpad=10)
-    ax.set_zlabel("μ₁₁ [m²/m³] × 10⁴", labelpad=10)
-    ax.set_title("Fig. 11: 3D Trajectory in (μ₁₁, S, RV) Subspace", pad=20)
-    ax.view_init(elev=25, azim=45)
-    ax.legend(loc="upper left", frameon=True)
+        ax.plot(S, RV_scaled, mu11_scaled, color=cfg["color"], linestyle=cfg["ls"], linewidth=2.2, label=cfg["label"])
 
+    ax.set_xlabel("Supersaturation\nRatio - S [-]", labelpad=14, fontsize=11)
+    ax.set_xlim(1.0, 2.5)
+    ax.set_xticks([1.0, 1.5, 2.0, 2.5])
+
+    ax.set_ylabel("Growth\nrate [m³/s]", labelpad=14, fontsize=11)
+    ax.set_ylim(0.0, 1.5)
+    ax.set_yticks([0.0, 0.5, 1.0, 1.5])
+    ax.text2D(0.85, 0.16, r"$\times 10^{-5}$", transform=ax.transAxes, fontsize=11)
+
+    ax.set_zlabel("μ₁₁ [m²/m³]", labelpad=10, fontsize=11)
+    ax.set_zlim(0.0, 2.5)
+    ax.set_zticks([0.0, 0.5, 1.0, 1.5, 2.0, 2.5])
+    ax.text2D(0.08, 0.88, r"$\times 10^{4}$", transform=ax.transAxes, fontsize=11)
+
+    ax.view_init(elev=22, azim=-42)
+    ax.set_title("Fig. 11: 3D Trajectory in (μ₁₁, S, Growth rate) Subspace", pad=15, fontsize=13)
+    ax.legend(loc="upper right", frameon=True, framealpha=0.95, edgecolor="#cbd5e1", fontsize=11)
     plt.tight_layout()
     plt.savefig(os.path.join(OUTPUT_DIR, "fig11_3d_phase_trajectory.png"), dpi=300)
     plt.close()
 
 
 def main():
-    print("=" * 70)
-    print("REPRODUCING PAPER RESULTS: SZILAGYI & LAKATOS (2015)")
-    print("=" * 70)
+    print("=" * 80)
+    print("REPRODUCING PAPER RESULTS FROM STORED SIMULATION DATA")
+    print(f"Data Source Directory : {DATA_DIR}/")
+    print(f"Figure Output Directory: {OUTPUT_DIR}/")
+    print("=" * 80)
 
-    simulator = BatchCrystallizerMOM()
+    # Ensure simulation datasets exist; if missing, alert user
+    required_files = [
+        "fig1_data.csv", "fig3_data.csv", "fig4_fig5_data.csv",
+        "fig6_fig7_data.csv", "fig8_fig9_data.csv", "fig10_data.csv", "fig11_data.csv"
+    ]
+    missing = [f for f in required_files if not os.path.exists(os.path.join(DATA_DIR, f))]
+    if missing:
+        print(f"Warning: {len(missing)} dataset(s) missing: {missing}")
+        print("Generating simulation datasets first...")
+        from generate_simulation_data import generate_all_simulation_datasets
+        generate_all_simulation_datasets()
 
-    generate_figure_1(simulator)
-    generate_figure_3(simulator)
-    generate_figure_6(simulator)
-    generate_figures_8_and_9(simulator)
-    generate_figure_10(simulator)
-    generate_figure_11(simulator)
+    generate_figure_1()
+    generate_figure_3()
+    generate_figures_4_and_5()
+    generate_figures_6_and_7()
+    generate_figures_8_and_9()
+    generate_figure_10()
+    generate_figure_11()
 
-    print("\nAll reproduction figures successfully generated and saved in:", OUTPUT_DIR)
+    print("\n" + "=" * 80)
+    print("ALL REPRODUCTION FIGURES SUCCESSFULLY GENERATED FROM STORED DATA IN:", OUTPUT_DIR)
+    print("=" * 80)
 
 
 if __name__ == "__main__":
